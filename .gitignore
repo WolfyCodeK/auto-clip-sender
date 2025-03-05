@@ -1,0 +1,29 @@
+# Ignore environment variables file with sensitive data
+.env
+.env.local
+.env.*.local
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Logs
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+temp_*
+
+# DO NOT ignore config.py - we want this in version control
+# !config.py 
