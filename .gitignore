@@ -27,3 +27,7 @@ temp_*
 
 # DO NOT ignore config.py - we want this in version control
 # !config.py 
+dist
+build
+bin
+*.zip

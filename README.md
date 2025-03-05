@@ -2,6 +2,12 @@
 
 A Python application that automatically processes NVIDIA Shadowplay recordings, trimming and compressing them to optimal sizes before sending them to you via Discord.
 
+## Executable Version
+
+Google Drive Link:
+
+https://drive.google.com/file/d/1zzClBQsXkF50f0BUXjc-CITzKw6WnFNH/view?usp=sharing
+
 ## Overview
 
 Auto-Clip-Sender monitors your Shadowplay recording folders for new gameplay videos. When it detects a new recording, it:
