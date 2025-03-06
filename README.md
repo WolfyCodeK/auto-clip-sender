@@ -1,9 +1,9 @@
-# Auto-Clip-Sender
+# ![Auto-Clip-Sender Logo](icons/32x32.ico) Auto-Clip-Sender
 
 A desktop application that automatically processes NVIDIA Shadowplay recordings, trimming and compressing them to optimal sizes before sending them to Discord via webhooks.
 
-![Auto-Clip-Sender Logo](icon.ico)
-Source: www.clipartmax.com
+
+Icon source: www.clipartmax.com
 
 ## Download
 
