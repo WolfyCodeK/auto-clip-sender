@@ -1,241 +1,99 @@
 import sys
 import os
-import io
-import traceback
-import logging
-import importlib
+import json
+import threading
+import importlib.util
 from datetime import datetime
 
-# Add code to ensure we can find config.py when running as an executable
+# Import our config helper for proper path handling
+import config_helper
+
+# Get proper application and config paths
+APP_DIR = config_helper.get_application_path()
+CONFIG_DIR = config_helper.get_user_config_dir()
+
+# Add code to ensure we can find modules when running as an executable
 if getattr(sys, 'frozen', False):
     # Running as compiled executable
-    application_path = os.path.dirname(sys.executable)
-    os.environ['PATH'] = application_path + os.pathsep + os.environ.get('PATH', '')
-    sys.path.insert(0, application_path)
-    print(f"Running as executable from: {application_path}")
-    print(f"Files in directory: {os.listdir(application_path)}")
-
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QLineEdit, QPushButton, QTabWidget, QSpinBox, QDoubleSpinBox,
-                             QComboBox, QGroupBox, QTextEdit, QFileDialog, QFormLayout, QMessageBox,
-                             QScrollArea, QFrame, QSplitter, QSizePolicy)
-from PyQt5.QtCore import Qt, QProcess, pyqtSignal, QObject, QTimer
-from PyQt5.QtGui import QFont, QPalette, QColor, QTextCursor
-
-# Import our configuration to use as defaults
-try:
-    # Try to import user config first
-    import config
-    from dotenv import load_dotenv
-    load_dotenv()  # Load environment variables from .env file
+    os.environ['PATH'] = APP_DIR + os.pathsep + os.environ.get('PATH', '')
+    sys.path.insert(0, APP_DIR)
+    print(f"Running as executable from: {APP_DIR}")
     
-    # Check if we need to create defaults file
-    try:
-        import defaults
-    except ImportError:
-        # Create the defaults file if it doesn't exist
-        with open('defaults.py', 'w') as f:
-            f.write('"""\nDefault configuration settings for the auto-clip-sender application.\n')
-            f.write('Do not modify this file directly. Changes to settings should be made in config.py.\n"""\n\n')
-            
-            # Folder configuration
-            f.write("# Folder configuration \n")
-            f.write(f'SHADOWPLAY_FOLDER = "{config.SHADOWPLAY_FOLDER}"\n')
-            f.write(f'OUTPUT_FOLDER = "{config.OUTPUT_FOLDER}"\n\n')
-            
-            # Size limits
-            f.write("# Size limits (MB)\n")
-            f.write(f'MIN_SIZE_MB = {config.MIN_SIZE_MB}      # Minimum target size (we want files to be at least this large)\n')
-            f.write(f'MAX_SIZE_MB = {config.MAX_SIZE_MB}     # Maximum size allowed by Discord\n')
-            f.write(f'TARGET_SIZE_MB = {config.TARGET_SIZE_MB}   # Target size in the middle of our range\n')
-            f.write(f'MAX_COMPRESSION_ATTEMPTS = {config.MAX_COMPRESSION_ATTEMPTS}  # Maximum number of compression iterations\n\n')
-            
-            # Compression settings
-            f.write("# Compression settings\n")
-            f.write(f'CRF_MIN = {config.CRF_MIN}          # Minimum CRF value (highest quality)\n')
-            f.write(f'CRF_MAX = {config.CRF_MAX}         # Maximum CRF value (lowest quality)\n')
-            f.write(f'CRF_STEP = {config.CRF_STEP}         # Step size for CRF adjustments\n\n')
-            
-            # FFmpeg presets
-            f.write("# FFmpeg presets\n")
-            f.write("# Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow\n")
-            f.write(f'EXTRACT_PRESET = "{config.EXTRACT_PRESET}"\n')
-            f.write(f'COMPRESSION_PRESET = "{config.COMPRESSION_PRESET}"\n\n')
-            
-            # File processing settings
-            f.write("# File processing settings\n")
-            f.write(f'CLIP_DURATION = {config.CLIP_DURATION}       # Duration in seconds to extract from the end of videos\n')
-            f.write(f'HIGH_QUALITY_CRF = {config.HIGH_QUALITY_CRF}    # CRF value for initial high-quality extraction\n\n')
-            
-            # Thresholds for adjustment
-            f.write("# Thresholds for adjustment size logic\n")
-            f.write(f'CLOSE_THRESHOLD = {config.CLOSE_THRESHOLD}    # {int(config.CLOSE_THRESHOLD*100)}% of target\n')
-            f.write(f'MEDIUM_THRESHOLD = {config.MEDIUM_THRESHOLD}  # {int(config.MEDIUM_THRESHOLD*100)}% of target\n')
-            f.write(f'FAR_THRESHOLD = {config.FAR_THRESHOLD}      # {int(config.FAR_THRESHOLD*100)}% of target \n')
-        
-        # Now import the defaults
-        import defaults
+    # Add ffmpeg to PATH if it exists
+    ffmpeg_dir = os.path.join(APP_DIR, 'ffmpeg')
+    if os.path.exists(ffmpeg_dir) and ffmpeg_dir not in os.environ['PATH']:
+        os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ['PATH']
+        print(f"Added ffmpeg directory to PATH: {ffmpeg_dir}")
 
-except ImportError:
-    # If config.py doesn't exist yet, try to use defaults
-    try:
-        import defaults
-        print("GUI: No config.py found, using defaults.py instead")
-        # Import the module into the config namespace
-        import sys
-        sys.modules['config'] = defaults
-        config = defaults
-    except ImportError:
-        print("GUI: No config.py or defaults.py found, creating basic defaults")
-        # If no defaults file, create basic default values
-        class ConfigDefaults:
-            pass
-        config = ConfigDefaults()
-        config.SHADOWPLAY_FOLDER = "C:/Users/YourName/Videos/Shadowplay Recordings"
-        config.OUTPUT_FOLDER = "C:/Users/YourName/Videos/Shadowplay Recordings/auto-clips"
-        config.MIN_SIZE_MB = 8
-        config.MAX_SIZE_MB = 10
-        config.TARGET_SIZE_MB = 9
-        config.MAX_COMPRESSION_ATTEMPTS = 5
-        config.CRF_MIN = 1
-        config.CRF_MAX = 30
-        config.CRF_STEP = 1
-        config.EXTRACT_PRESET = "fast"
-        config.COMPRESSION_PRESET = "medium"
-        config.CLIP_DURATION = 15
-        config.HIGH_QUALITY_CRF = 18
-        config.CLOSE_THRESHOLD = 0.9
-        config.MEDIUM_THRESHOLD = 0.75
-        config.FAR_THRESHOLD = 0.5
-        
-        # Create the defaults file
-        with open('defaults.py', 'w') as f:
-            f.write('"""\nDefault configuration settings for the auto-clip-sender application.\n')
-            f.write('Do not modify this file directly. Changes to settings should be made in config.py.\n"""\n\n')
-            
-            # Folder configuration
-            f.write("# Folder configuration \n")
-            f.write(f'SHADOWPLAY_FOLDER = "{config.SHADOWPLAY_FOLDER}"\n')
-            f.write(f'OUTPUT_FOLDER = "{config.OUTPUT_FOLDER}"\n\n')
-            
-            # Size limits
-            f.write("# Size limits (MB)\n")
-            f.write(f'MIN_SIZE_MB = {config.MIN_SIZE_MB}      # Minimum target size (we want files to be at least this large)\n')
-            f.write(f'MAX_SIZE_MB = {config.MAX_SIZE_MB}     # Maximum size allowed by Discord\n')
-            f.write(f'TARGET_SIZE_MB = {config.TARGET_SIZE_MB}   # Target size in the middle of our range\n')
-            f.write(f'MAX_COMPRESSION_ATTEMPTS = {config.MAX_COMPRESSION_ATTEMPTS}  # Maximum number of compression iterations\n\n')
-            
-            # Compression settings
-            f.write("# Compression settings\n")
-            f.write(f'CRF_MIN = {config.CRF_MIN}          # Minimum CRF value (highest quality)\n')
-            f.write(f'CRF_MAX = {config.CRF_MAX}         # Maximum CRF value (lowest quality)\n')
-            f.write(f'CRF_STEP = {config.CRF_STEP}         # Step size for CRF adjustments\n\n')
-            
-            # FFmpeg presets
-            f.write("# FFmpeg presets\n")
-            f.write("# Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow\n")
-            f.write(f'EXTRACT_PRESET = "{config.EXTRACT_PRESET}"\n')
-            f.write(f'COMPRESSION_PRESET = "{config.COMPRESSION_PRESET}"\n\n')
-            
-            # File processing settings
-            f.write("# File processing settings\n")
-            f.write(f'CLIP_DURATION = {config.CLIP_DURATION}       # Duration in seconds to extract from the end of videos\n')
-            f.write(f'HIGH_QUALITY_CRF = {config.HIGH_QUALITY_CRF}    # CRF value for initial high-quality extraction\n\n')
-            
-            # Thresholds for adjustment
-            f.write("# Thresholds for adjustment size logic\n")
-            f.write(f'CLOSE_THRESHOLD = {config.CLOSE_THRESHOLD}    # {int(config.CLOSE_THRESHOLD*100)}% of target\n')
-            f.write(f'MEDIUM_THRESHOLD = {config.MEDIUM_THRESHOLD}  # {int(config.MEDIUM_THRESHOLD*100)}% of target\n')
-            f.write(f'FAR_THRESHOLD = {config.FAR_THRESHOLD}      # {int(config.FAR_THRESHOLD*100)}% of target \n')
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTabWidget, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QFileDialog, QMessageBox, QSplitter
+)
+from PyQt5.QtCore import Qt, QProcess, pyqtSignal, QObject, QProcessEnvironment, QSize
+from PyQt5.QtGui import QFont, QPalette, QColor, QTextCursor, QIcon
 
-        # Create a minimal config.py to ensure bot.py will work
-        with open('config.py', 'w') as f:
-            f.write('"""\nConfiguration settings for the auto-clip-sender application.\n')
-            f.write('This file can be committed to version control.\n"""\n\n')
-            
-            # Folder configuration
-            f.write("# Folder configuration \n")
-            f.write(f'SHADOWPLAY_FOLDER = "{config.SHADOWPLAY_FOLDER}"\n')
-            f.write(f'OUTPUT_FOLDER = "{config.OUTPUT_FOLDER}"\n\n')
-            
-            # Size limits
-            f.write("# Size limits (MB)\n")
-            f.write(f'MIN_SIZE_MB = {config.MIN_SIZE_MB}      # Minimum target size (we want files to be at least this large)\n')
-            f.write(f'MAX_SIZE_MB = {config.MAX_SIZE_MB}     # Maximum size allowed by Discord\n')
-            f.write(f'TARGET_SIZE_MB = {config.TARGET_SIZE_MB}   # Target size in the middle of our range\n')
-            f.write(f'MAX_COMPRESSION_ATTEMPTS = {config.MAX_COMPRESSION_ATTEMPTS}  # Maximum number of compression iterations\n\n')
-            
-            # Compression settings
-            f.write("# Compression settings\n")
-            f.write(f'CRF_MIN = {config.CRF_MIN}          # Minimum CRF value (highest quality)\n')
-            f.write(f'CRF_MAX = {config.CRF_MAX}         # Maximum CRF value (lowest quality)\n')
-            f.write(f'CRF_STEP = {config.CRF_STEP}         # Step size for CRF adjustments\n\n')
-            
-            # FFmpeg presets
-            f.write("# FFmpeg presets\n")
-            f.write("# Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow\n")
-            f.write(f'EXTRACT_PRESET = "{config.EXTRACT_PRESET}"\n')
-            f.write(f'COMPRESSION_PRESET = "{config.COMPRESSION_PRESET}"\n\n')
-            
-            # File processing settings
-            f.write("# File processing settings\n")
-            f.write(f'CLIP_DURATION = {config.CLIP_DURATION}       # Duration in seconds to extract from the end of videos\n')
-            f.write(f'HIGH_QUALITY_CRF = {config.HIGH_QUALITY_CRF}    # CRF value for initial high-quality extraction\n\n')
-            
-            # Thresholds for adjustment
-            f.write("# Thresholds for adjustment size logic\n")
-            f.write(f'CLOSE_THRESHOLD = {config.CLOSE_THRESHOLD}    # {int(config.CLOSE_THRESHOLD*100)}% of target\n')
-            f.write(f'MEDIUM_THRESHOLD = {config.MEDIUM_THRESHOLD}  # {int(config.MEDIUM_THRESHOLD*100)}% of target\n')
-            f.write(f'FAR_THRESHOLD = {config.FAR_THRESHOLD}      # {int(config.FAR_THRESHOLD*100)}% of target \n')
+# Import dotenv for environment variables - use absolute path
+from dotenv import load_dotenv
 
-# Try to load from defaults if it exists, otherwise use the hard-coded values
-try:
-    import defaults
-    # Store default values for reset functionality
-    # Update to use defaults.py instead of config.py for default values
-    DEFAULT_VALUES = {
-        'SHADOWPLAY_FOLDER': defaults.SHADOWPLAY_FOLDER,
-        'OUTPUT_FOLDER': defaults.OUTPUT_FOLDER,
-        'MIN_SIZE_MB': defaults.MIN_SIZE_MB,
-        'MAX_SIZE_MB': defaults.MAX_SIZE_MB,
-        'TARGET_SIZE_MB': defaults.TARGET_SIZE_MB,
-        'MAX_COMPRESSION_ATTEMPTS': defaults.MAX_COMPRESSION_ATTEMPTS,
-        'CRF_MIN': defaults.CRF_MIN,
-        'CRF_MAX': defaults.CRF_MAX,
-        'CRF_STEP': defaults.CRF_STEP,
-        'EXTRACT_PRESET': defaults.EXTRACT_PRESET,
-        'COMPRESSION_PRESET': defaults.COMPRESSION_PRESET,
-        'CLIP_DURATION': defaults.CLIP_DURATION,
-        'HIGH_QUALITY_CRF': defaults.HIGH_QUALITY_CRF,
-        'CLOSE_THRESHOLD': defaults.CLOSE_THRESHOLD,
-        'MEDIUM_THRESHOLD': defaults.MEDIUM_THRESHOLD,
-        'FAR_THRESHOLD': defaults.FAR_THRESHOLD,
-        # Discord webhook URL (stored in .env, not config.py)
-        'WEBHOOK_URL': os.getenv("WEBHOOK_URL", ""),
-    }
+# Get current directory for .env file path
+env_path = config_helper.get_config_file_path('.env')
 
-except ImportError:
-    # Store default values for reset functionality using config as fallback
-    DEFAULT_VALUES = {
-        'SHADOWPLAY_FOLDER': config.SHADOWPLAY_FOLDER,
-        'OUTPUT_FOLDER': config.OUTPUT_FOLDER,
-        'MIN_SIZE_MB': config.MIN_SIZE_MB,
-        'MAX_SIZE_MB': config.MAX_SIZE_MB,
-        'TARGET_SIZE_MB': config.TARGET_SIZE_MB,
-        'MAX_COMPRESSION_ATTEMPTS': config.MAX_COMPRESSION_ATTEMPTS,
-        'CRF_MIN': config.CRF_MIN,
-        'CRF_MAX': config.CRF_MAX,
-        'CRF_STEP': config.CRF_STEP,
-        'EXTRACT_PRESET': config.EXTRACT_PRESET,
-        'COMPRESSION_PRESET': config.COMPRESSION_PRESET,
-        'CLIP_DURATION': config.CLIP_DURATION,
-        'HIGH_QUALITY_CRF': config.HIGH_QUALITY_CRF,
-        'CLOSE_THRESHOLD': config.CLOSE_THRESHOLD,
-        'MEDIUM_THRESHOLD': config.MEDIUM_THRESHOLD,
-        'FAR_THRESHOLD': config.FAR_THRESHOLD,
-        # Discord webhook URL (stored in .env, not config.py)
-        'WEBHOOK_URL': os.getenv("WEBHOOK_URL", ""),
-    }
+# Load .env file with explicit path
+print(f"Loading environment variables from: {env_path}")
+load_dotenv(dotenv_path=env_path)
+
+# Default configuration values
+DEFAULT_CONFIG = {
+    'SHADOWPLAY_FOLDER': "C:/Users/YourName/Videos/Shadowplay Recordings",
+    'OUTPUT_FOLDER': "C:/Users/YourName/Videos/Shadowplay Recordings/auto-clips",
+    'MIN_SIZE_MB': 8.0,
+    'MAX_SIZE_MB': 10.0,
+    'TARGET_SIZE_MB': 9.0,
+    'MAX_COMPRESSION_ATTEMPTS': 5,
+    'CRF_MIN': 1,
+    'CRF_MAX': 30,
+    'CRF_STEP': 1,
+    'EXTRACT_PRESET': "fast",
+    'COMPRESSION_PRESET': "medium",
+    'COMPRESSION_METHOD': "Progressive",
+    'CLIP_DURATION': 15,
+    'HIGH_QUALITY_CRF': 18,
+    'CLOSE_THRESHOLD': 0.9,
+    'MEDIUM_THRESHOLD': 0.75,
+    'FAR_THRESHOLD': 0.5,
+    'WEBHOOK_URL': ""
+}
+
+# Load configuration using config_helper
+CONFIG_FILE = 'config.json'
+DEFAULTS_FILE = 'defaults.json'
+
+# Load defaults.json
+# First, ensure defaults.json exists
+if not os.path.exists(config_helper.get_config_file_path(DEFAULTS_FILE)):
+    print(f"Creating default configuration file: {DEFAULTS_FILE}")
+    config_helper.save_json_config(DEFAULT_CONFIG, DEFAULTS_FILE)
+
+# Load defaults
+DEFAULT_VALUES = config_helper.load_json_config(DEFAULTS_FILE)
+# Ensure all keys exist in DEFAULT_VALUES
+for key, value in DEFAULT_CONFIG.items():
+    if key not in DEFAULT_VALUES:
+        DEFAULT_VALUES[key] = value
+
+# Load user configuration or create it from defaults
+CONFIG = config_helper.load_json_config(CONFIG_FILE)
+if not CONFIG:
+    print(f"Creating user configuration file from defaults: {CONFIG_FILE}")
+    CONFIG = DEFAULT_VALUES.copy()
+    config_helper.save_json_config(CONFIG, CONFIG_FILE)
+
+def remove_last_line(text_edit):
+    text = text_edit.toPlainText()
+
+    lines = text.split("\n")
+    if lines:
+        lines.pop()  # Remove the last line
+        text_edit.setPlainText("\n".join(lines))
 
 # Custom SpinBox classes that ignore wheel events
 class NoWheelSpinBox(QSpinBox):
@@ -302,27 +160,67 @@ class AutoClipSenderGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.process = None
+        self.processor_thread = None
+        self.stop_event = threading.Event()
+        
+        # Try multiple approaches to set window icon using icons folder
+        icons_folder = os.path.join(APP_DIR, 'icons')
+        if os.path.exists(icons_folder):
+            # Create composite icon with all available sizes
+            window_icon = QIcon()
+            icon_sizes = ['16x16.ico', '32x32.ico', '48x48.ico', '64x64.ico', '128x128.ico']
+            
+            for icon_file in icon_sizes:
+                icon_path = os.path.join(icons_folder, icon_file)
+                if os.path.exists(icon_path):
+                    # Extract size from filename (e.g., "16x16.ico" -> 16)
+                    try:
+                        size = int(icon_file.split('x')[0])
+                        window_icon.addFile(icon_path, QSize(size, size))
+                        print(f"Added window icon size {size}x{size} from {icon_file}")
+                    except Exception as e:
+                        print(f"Error adding window icon {icon_file}: {e}")
+            
+            # Set the window icon
+            if not window_icon.isNull():
+                self.setWindowIcon(window_icon)
+                print("Set composite window icon from multiple files")
+            
+                # Also set the app user model ID for Windows
+                if os.name == 'nt':
+                    try:
+                        import ctypes
+                        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("autoClipSender.1.0")
+                    except Exception as e:
+                        print(f"Error setting app user model ID: {e}")
+        else:
+            # Fallback to single icon file if folder doesn't exist
+            icon_path = os.path.join(APP_DIR, 'icon.ico')
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+                print(f"Set window icon from single file: {icon_path}")
+            else:
+                print(f"No icons found at either {icons_folder} or {icon_path}")
+            
         self.init_ui()
         
-        # Check if the bot is already running when GUI starts (e.g., from another instance)
-        self.check_for_running_bot()
+        # Check if the clip processor is already running when GUI starts (e.g., from another instance)
+        self.check_for_running_processor()
     
     def get_config_value(self, key):
         """
         Get a configuration value with fallback to defaults
         """
-        # First try to get from config.py
-        import config
-        try:
-            return getattr(config, key)
-        except AttributeError:
+        # First try to get from user config
+        if key in CONFIG:
+            return CONFIG[key]
             # If not in config, try to get from DEFAULT_VALUES
-            if key in DEFAULT_VALUES:
+        elif key in DEFAULT_VALUES:
                 return DEFAULT_VALUES[key]
-            else:
-                # Last resort, return empty string
-                print(f"Warning: Config value {key} not found in config.py or defaults")
-                return ""
+        else:
+            # Last resort, return empty string
+            print(f"Warning: Config value {key} not found in config.json or defaults.json")
+            return ""
 
     def init_ui(self):
         # Set window properties
@@ -425,7 +323,12 @@ class AutoClipSenderGUI(QMainWindow):
         
         main_layout.addWidget(splitter)
         
+        # Set the central widget
         self.setCentralWidget(main_widget)
+        
+        # Load webhook URL from config
+        if hasattr(self, 'webhook_url'):
+            self.webhook_url.setText(CONFIG.get('WEBHOOK_URL', ''))
         
         # Log startup
         print(f"Auto Clip Sender GUI initialized at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -565,6 +468,7 @@ class AutoClipSenderGUI(QMainWindow):
         # Create tabs for different settings categories
         folders_tab = QWidget()
         sizes_tab = QWidget()
+        clipping_tab = QWidget()  # New tab for clipping/processing settings
         compression_tab = QWidget()
         ffmpeg_tab = QWidget()
         discord_tab = QWidget()
@@ -572,13 +476,15 @@ class AutoClipSenderGUI(QMainWindow):
         # Set up layouts for each tab
         folders_layout = QVBoxLayout(folders_tab)
         sizes_layout = QVBoxLayout(sizes_tab)
+        clipping_layout = QVBoxLayout(clipping_tab)  # Layout for new tab
         compression_layout = QVBoxLayout(compression_tab)
         ffmpeg_layout = QVBoxLayout(ffmpeg_tab)
         discord_layout = QVBoxLayout(discord_tab)
         
-        # Add tabs to the tab widget
+        # Add tabs to the tab widget - insert new tab after folders and sizes
         self.tabs.addTab(folders_tab, "Folders")
         self.tabs.addTab(sizes_tab, "Size Limits")
+        self.tabs.addTab(clipping_tab, "Clipping")  # Add new tab
         self.tabs.addTab(compression_tab, "Compression")
         self.tabs.addTab(ffmpeg_tab, "FFmpeg")
         self.tabs.addTab(discord_tab, "Discord")
@@ -630,9 +536,38 @@ class AutoClipSenderGUI(QMainWindow):
         sizes_layout.addWidget(QLabel("Max Compression Attempts:"))
         sizes_layout.addWidget(self.create_setting_row("Max Compression Attempts:", self.max_attempts, 'MAX_COMPRESSION_ATTEMPTS')[1])
         sizes_layout.addStretch()
+        
+        # CLIPPING TAB (NEW)
+        # Move clip duration and compression method settings to this tab
+        self.clip_duration = NoWheelSpinBox()
+        self.clip_duration.setRange(5, 300)
+        self.clip_duration.setValue(int(self.get_config_value('CLIP_DURATION')))
+        
+        # Compression method selector
+        self.compression_method = NoWheelComboBox()
+        self.compression_method.addItems(["Progressive", "Quick"])
+        self.compression_method.setCurrentText(self.get_config_value('COMPRESSION_METHOD'))
+        
+        # Help labels
+        clip_duration_help = QLabel("Duration in seconds to extract from the end of each recording.")
+        clip_duration_help.setWordWrap(True)
+        
+        compression_method_help = QLabel("• Quick: Single pass compression that produces smaller files quickly (CRF=23)\n• Progressive: Multiple passes to find optimal quality-to-size ratio (slower but higher quality)")
+        compression_method_help.setWordWrap(True)
+        
+        # Add settings to clipping tab layout
+        clipping_layout.addWidget(QLabel("Clip Duration (seconds):"))
+        clipping_layout.addWidget(self.create_setting_row("Clip Duration (seconds):", self.clip_duration, 'CLIP_DURATION')[1])
+        clipping_layout.addWidget(clip_duration_help)
+        clipping_layout.addSpacing(20)  # Add some space between settings
+        
+        clipping_layout.addWidget(QLabel("Compression Method:"))
+        clipping_layout.addWidget(self.create_setting_row("Compression Method:", self.compression_method, 'COMPRESSION_METHOD')[1])
+        clipping_layout.addWidget(compression_method_help)
+        clipping_layout.addStretch()
 
         # COMPRESSION TAB
-        # Create compression settings
+        # Create compression settings - removed clip duration and compression method
         self.crf_min = NoWheelSpinBox()
         self.crf_min.setRange(0, 51)
         self.crf_min.setValue(int(self.get_config_value('CRF_MIN')))
@@ -645,23 +580,24 @@ class AutoClipSenderGUI(QMainWindow):
         self.crf_step.setRange(1, 10)
         self.crf_step.setValue(int(self.get_config_value('CRF_STEP')))
         
-        self.clip_duration = NoWheelSpinBox()
-        self.clip_duration.setRange(5, 300)
-        self.clip_duration.setValue(int(self.get_config_value('CLIP_DURATION')))
-        
         self.high_quality_crf = NoWheelSpinBox()
         self.high_quality_crf.setRange(0, 51)
         self.high_quality_crf.setValue(int(self.get_config_value('HIGH_QUALITY_CRF')))
         
-        # Add compression settings to layout
+        # Add a help label explaining CRF values
+        crf_help = QLabel("CRF (Constant Rate Factor) controls quality. Lower values = higher quality, larger files.")
+        crf_help.setWordWrap(True)
+        
+        # Add compression settings to layout - removed clip duration and compression method
+        compression_layout.addWidget(crf_help)
+        compression_layout.addSpacing(10)
+        
         compression_layout.addWidget(QLabel("Minimum CRF Value:"))
         compression_layout.addWidget(self.create_setting_row("Minimum CRF Value:", self.crf_min, 'CRF_MIN')[1])
         compression_layout.addWidget(QLabel("Maximum CRF Value:"))
         compression_layout.addWidget(self.create_setting_row("Maximum CRF Value:", self.crf_max, 'CRF_MAX')[1])
         compression_layout.addWidget(QLabel("CRF Step Size:"))
         compression_layout.addWidget(self.create_setting_row("CRF Step Size:", self.crf_step, 'CRF_STEP')[1])
-        compression_layout.addWidget(QLabel("Clip Duration (seconds):"))
-        compression_layout.addWidget(self.create_setting_row("Clip Duration (seconds):", self.clip_duration, 'CLIP_DURATION')[1])
         compression_layout.addWidget(QLabel("High Quality CRF:"))
         compression_layout.addWidget(self.create_setting_row("High Quality CRF:", self.high_quality_crf, 'HIGH_QUALITY_CRF')[1])
         compression_layout.addStretch()
@@ -688,9 +624,9 @@ class AutoClipSenderGUI(QMainWindow):
         # DISCORD TAB
         # Create Discord credential settings
         self.webhook_url = QLineEdit()
-        # Load the webhook URL from environment variables
-        webhook_url = os.getenv("WEBHOOK_URL", "")
-        self.webhook_url.setText(webhook_url)
+        # Load the webhook URL from CONFIG
+        self.webhook_url.setText(self.get_config_value('WEBHOOK_URL'))
+        print(f"Loaded webhook URL from config: {'[SET]' if self.webhook_url.text() else '[NOT SET]'}")
         
         # Add Discord settings to layout with a different approach (no reset button)
         webhook_layout = QHBoxLayout()
@@ -750,168 +686,107 @@ class AutoClipSenderGUI(QMainWindow):
         if reply == QMessageBox.No:
             return
         
-        # Import defaults to ensure we're using the latest values
+        # Save current webhook URL before restoring defaults
+        current_webhook_url = self.webhook_url.text().strip()
+        
+        # Load default values
         try:
-            import defaults
-            import importlib
-            importlib.reload(defaults)
+            defaults = config_helper.load_json_config(DEFAULTS_FILE)
             
             # Restore folder settings
-            self.shadowplay_folder.setText(defaults.SHADOWPLAY_FOLDER)
-            self.output_folder.setText(defaults.OUTPUT_FOLDER)
+            self.shadowplay_folder.setText(defaults.get('SHADOWPLAY_FOLDER', DEFAULT_CONFIG['SHADOWPLAY_FOLDER']))
+            self.output_folder.setText(defaults.get('OUTPUT_FOLDER', DEFAULT_CONFIG['OUTPUT_FOLDER']))
             
             # Restore size settings
-            self.min_size.setValue(defaults.MIN_SIZE_MB)
-            self.max_size.setValue(defaults.MAX_SIZE_MB)
-            self.target_size.setValue(defaults.TARGET_SIZE_MB)
-            self.max_attempts.setValue(defaults.MAX_COMPRESSION_ATTEMPTS)
+            self.min_size.setValue(defaults.get('MIN_SIZE_MB', DEFAULT_CONFIG['MIN_SIZE_MB']))
+            self.max_size.setValue(defaults.get('MAX_SIZE_MB', DEFAULT_CONFIG['MAX_SIZE_MB']))
+            self.target_size.setValue(defaults.get('TARGET_SIZE_MB', DEFAULT_CONFIG['TARGET_SIZE_MB']))
+            self.max_attempts.setValue(defaults.get('MAX_COMPRESSION_ATTEMPTS', DEFAULT_CONFIG['MAX_COMPRESSION_ATTEMPTS']))
             
             # Restore clip settings
-            self.clip_duration.setValue(defaults.CLIP_DURATION)
-            self.high_quality_crf.setValue(defaults.HIGH_QUALITY_CRF)
+            self.clip_duration.setValue(defaults.get('CLIP_DURATION', DEFAULT_CONFIG['CLIP_DURATION']))
+            self.high_quality_crf.setValue(defaults.get('HIGH_QUALITY_CRF', DEFAULT_CONFIG['HIGH_QUALITY_CRF']))
             
             # Restore compression settings
-            self.crf_min.setValue(defaults.CRF_MIN)
-            self.crf_max.setValue(defaults.CRF_MAX)
-            self.crf_step.setValue(defaults.CRF_STEP)
+            self.crf_min.setValue(defaults.get('CRF_MIN', DEFAULT_CONFIG['CRF_MIN']))
+            self.crf_max.setValue(defaults.get('CRF_MAX', DEFAULT_CONFIG['CRF_MAX']))
+            self.crf_step.setValue(defaults.get('CRF_STEP', DEFAULT_CONFIG['CRF_STEP']))
+            self.compression_method.setCurrentText(defaults.get('COMPRESSION_METHOD', DEFAULT_CONFIG['COMPRESSION_METHOD']))
             
             # Restore FFmpeg presets
-            self.extract_preset.setCurrentText(defaults.EXTRACT_PRESET)
-            self.compression_preset.setCurrentText(defaults.COMPRESSION_PRESET)
+            self.extract_preset.setCurrentText(defaults.get('EXTRACT_PRESET', DEFAULT_CONFIG['EXTRACT_PRESET']))
+            self.compression_preset.setCurrentText(defaults.get('COMPRESSION_PRESET', DEFAULT_CONFIG['COMPRESSION_PRESET']))
             
-            # Restore threshold settings (if they exist in this form)
-            if hasattr(self, 'close_threshold'):
-                self.close_threshold.setValue(defaults.CLOSE_THRESHOLD)
-            if hasattr(self, 'medium_threshold'):
-                self.medium_threshold.setValue(defaults.MEDIUM_THRESHOLD)
-            if hasattr(self, 'far_threshold'):
-                self.far_threshold.setValue(defaults.FAR_THRESHOLD)
-            
-            print("Values restored from defaults.py")
-        except ImportError:
-            print("Warning: defaults.py not found, using hard-coded defaults")
-            # Fall back to DEFAULT_VALUES if defaults.py can't be imported
-            self.shadowplay_folder.setText(DEFAULT_VALUES['SHADOWPLAY_FOLDER'])
-            self.output_folder.setText(DEFAULT_VALUES['OUTPUT_FOLDER'])
+            print("Values restored from defaults.json")
+        except Exception as e:
+            print(f"Error restoring defaults: {e}")
+            # Fall back to DEFAULT_CONFIG if defaults.json has issues
+            self.shadowplay_folder.setText(DEFAULT_CONFIG['SHADOWPLAY_FOLDER'])
+            self.output_folder.setText(DEFAULT_CONFIG['OUTPUT_FOLDER'])
             
             # Restore size settings
-            self.min_size.setValue(DEFAULT_VALUES['MIN_SIZE_MB'])
-            self.max_size.setValue(DEFAULT_VALUES['MAX_SIZE_MB'])
-            self.target_size.setValue(DEFAULT_VALUES['TARGET_SIZE_MB'])
-            self.max_attempts.setValue(DEFAULT_VALUES['MAX_COMPRESSION_ATTEMPTS'])
+            self.min_size.setValue(DEFAULT_CONFIG['MIN_SIZE_MB'])
+            self.max_size.setValue(DEFAULT_CONFIG['MAX_SIZE_MB'])
+            self.target_size.setValue(DEFAULT_CONFIG['TARGET_SIZE_MB'])
+            self.max_attempts.setValue(DEFAULT_CONFIG['MAX_COMPRESSION_ATTEMPTS'])
             
             # Restore clip settings
-            self.clip_duration.setValue(DEFAULT_VALUES['CLIP_DURATION'])
-            self.high_quality_crf.setValue(DEFAULT_VALUES['HIGH_QUALITY_CRF'])
+            self.clip_duration.setValue(DEFAULT_CONFIG['CLIP_DURATION'])
+            self.high_quality_crf.setValue(DEFAULT_CONFIG['HIGH_QUALITY_CRF'])
             
             # Restore compression settings
-            self.crf_min.setValue(DEFAULT_VALUES['CRF_MIN'])
-            self.crf_max.setValue(DEFAULT_VALUES['CRF_MAX'])
-            self.crf_step.setValue(DEFAULT_VALUES['CRF_STEP'])
+            self.crf_min.setValue(DEFAULT_CONFIG['CRF_MIN'])
+            self.crf_max.setValue(DEFAULT_CONFIG['CRF_MAX'])
+            self.crf_step.setValue(DEFAULT_CONFIG['CRF_STEP'])
+            self.compression_method.setCurrentText(DEFAULT_CONFIG['COMPRESSION_METHOD'])
             
             # Restore FFmpeg presets
-            self.extract_preset.setCurrentText(DEFAULT_VALUES['EXTRACT_PRESET'])
-            self.compression_preset.setCurrentText(DEFAULT_VALUES['COMPRESSION_PRESET'])
-            
-            # Restore threshold settings (if they exist in this form)
-            if hasattr(self, 'close_threshold'):
-                self.close_threshold.setValue(DEFAULT_VALUES['CLOSE_THRESHOLD'])
-            if hasattr(self, 'medium_threshold'):
-                self.medium_threshold.setValue(DEFAULT_VALUES['MEDIUM_THRESHOLD'])
-            if hasattr(self, 'far_threshold'):
-                self.far_threshold.setValue(DEFAULT_VALUES['FAR_THRESHOLD'])
-            
-        # For webhook URL, keep the existing value by default
-        # The webhook URL is sensitive info and doesn't have a default that makes sense to restore
+            self.extract_preset.setCurrentText(DEFAULT_CONFIG['EXTRACT_PRESET'])
+            self.compression_preset.setCurrentText(DEFAULT_CONFIG['COMPRESSION_PRESET'])
         
-        print("All settings have been restored to defaults. Click 'Save Configuration' to apply these changes.")
-        QMessageBox.information(self, "Defaults Restored", "All settings have been restored to defaults. Click 'Save Configuration' to apply these changes.")
+        # Keep the current webhook URL instead of resetting it
+        self.webhook_url.setText(current_webhook_url)
+        print("Webhook URL preserved during defaults restoration")
+        
+        print("All settings except webhook URL have been restored to defaults. Click 'Save Configuration' to apply these changes.")
+        QMessageBox.information(self, "Defaults Restored", "All settings except webhook URL have been restored to defaults. Click 'Save Configuration' to apply these changes.")
     
     def save_configuration(self):
-        # Save settings to config.py
-        try:
-            with open('config.py', 'w') as f:
-                f.write('"""\n')
-                f.write('Configuration settings for the auto-clip-sender application.\n')
-                f.write('This file can be committed to version control.\n')
-                f.write('"""\n\n')
+        # Prepare config dictionary
+        config = {
+            'SHADOWPLAY_FOLDER': self.shadowplay_folder.text(),
+            'OUTPUT_FOLDER': self.output_folder.text(),
+            'MIN_SIZE_MB': self.min_size.value(),
+            'MAX_SIZE_MB': self.max_size.value(),
+            'TARGET_SIZE_MB': self.target_size.value(),
+            'MAX_COMPRESSION_ATTEMPTS': self.max_attempts.value(),
+            'CRF_MIN': self.crf_min.value(),
+            'CRF_MAX': self.crf_max.value(),
+            'CRF_STEP': self.crf_step.value(),
+            'EXTRACT_PRESET': self.extract_preset.currentText(),
+            'COMPRESSION_PRESET': self.compression_preset.currentText(),
+            'COMPRESSION_METHOD': self.compression_method.currentText(),
+            'CLIP_DURATION': self.clip_duration.value(),
+            'HIGH_QUALITY_CRF': self.high_quality_crf.value(),
+            'CLOSE_THRESHOLD': 0.9,
+            'MEDIUM_THRESHOLD': 0.75,
+            'FAR_THRESHOLD': 0.5,
+            'WEBHOOK_URL': self.webhook_url.text().strip()
+        }
+
+        # Save to config.json using config_helper
+        if config_helper.save_json_config(config, CONFIG_FILE):
+            # The config_helper already prints a save message, so we don't need to duplicate it
+            # Update global CONFIG dictionary
+            global CONFIG
+            CONFIG = config
                 
-                # Folder configuration 
-                f.write('# Folder configuration \n')
-                f.write(f'SHADOWPLAY_FOLDER = "{self.shadowplay_folder.text()}"\n')
-                f.write(f'OUTPUT_FOLDER = "{self.output_folder.text()}"\n\n')
-                
-                # Size limits
-                f.write('# Size limits (MB)\n')
-                f.write(f'MIN_SIZE_MB = {self.min_size.value()}      # Minimum target size (we want files to be at least this large)\n')
-                f.write(f'MAX_SIZE_MB = {self.max_size.value()}     # Maximum size allowed by Discord\n')
-                f.write(f'TARGET_SIZE_MB = {self.target_size.value()}   # Target size in the middle of our range\n')
-                f.write(f'MAX_COMPRESSION_ATTEMPTS = {self.max_attempts.value()}  # Maximum number of compression iterations\n\n')
-                
-                # Compression settings
-                f.write('# Compression settings\n')
-                f.write(f'CRF_MIN = {self.crf_min.value()}          # Minimum CRF value (highest quality)\n')
-                f.write(f'CRF_MAX = {self.crf_max.value()}         # Maximum CRF value (lowest quality)\n')
-                f.write(f'CRF_STEP = {self.crf_step.value()}         # Step size for CRF adjustments\n\n')
-                
-                # FFmpeg presets
-                f.write('# FFmpeg presets\n')
-                f.write('# Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow\n')
-                f.write(f'EXTRACT_PRESET = "{self.extract_preset.currentText()}"\n')
-                f.write(f'COMPRESSION_PRESET = "{self.compression_preset.currentText()}"\n\n')
-                
-                # File processing settings
-                f.write('# File processing settings\n')
-                f.write(f'CLIP_DURATION = {self.clip_duration.value()}       # Duration in seconds to extract from the end of videos\n')
-                f.write(f'HIGH_QUALITY_CRF = {self.high_quality_crf.value()}    # CRF value for initial high-quality extraction\n\n')
-                
-                # Threshold settings
-                f.write('# Thresholds for adjustment size logic\n')
-                f.write('CLOSE_THRESHOLD = 0.9    # 90% of target\n')
-                f.write('MEDIUM_THRESHOLD = 0.75  # 75% of target\n')
-                f.write('FAR_THRESHOLD = 0.5      # 50% of target \n')
-                
-            # Save Discord webhook URL to .env file
-            self.save_env_file()
-                
-            print("Configuration saved successfully")
             if self.statusBar():
                 self.statusBar().showMessage("Configuration saved successfully", 3000)
             return True
-        except Exception as e:
-            print(f"Error saving configuration: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save configuration: {e}")
+        else:
+            QMessageBox.critical(self, "Error", "Failed to save configuration")
             return False
-
-    def save_env_file(self):
-        """
-        Save sensitive information to the .env file
-        """
-        try:
-            # Check if .env file exists and read its contents
-            env_contents = {}
-            if os.path.exists('.env'):
-                with open('.env', 'r') as env_file:
-                    for line in env_file:
-                        line = line.strip()
-                        if line and not line.startswith('#') and '=' in line:
-                            key, value = line.split('=', 1)
-                            env_contents[key] = value
-            
-            # Update Discord webhook URL
-            webhook_url = self.webhook_url.text().strip()
-            if webhook_url:
-                env_contents["WEBHOOK_URL"] = webhook_url
-            
-            # Write the updated .env file
-            with open('.env', 'w') as env_file:
-                for key, value in env_contents.items():
-                    env_file.write(f"{key}={value}\n")
-            
-            print("Environment variables saved to .env file")
-        except Exception as e:
-            print(f"Error saving .env file: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save .env file: {e}")
 
     def test_webhook(self):
         """
@@ -954,42 +829,114 @@ class AutoClipSenderGUI(QMainWindow):
         # Save the configuration
         self.save_configuration()
         
-        # Check if clip_processor.py exists
-        if not os.path.exists("clip_processor.py"):
-            QMessageBox.critical(self, "Error", "clip_processor.py not found in the current directory. Please ensure the file exists.")
-            return
-        
-        # Get Python executable path
-        python_exe = sys.executable
-        print(f"Using Python executable: {python_exe}")
-        print(f"Current working directory: {os.getcwd()}")
-        
-        try:
-            # Start the bot process
-            self.process = QProcess()
-            self.process.readyReadStandardOutput.connect(self.handle_stdout)
-            self.process.readyReadStandardError.connect(self.handle_stderr)
-            self.process.finished.connect(self.process_finished)
+        # Get the resource path - handles both normal and PyInstaller modes
+        def resource_path(relative_path):
+            """Get absolute path to resource, works for dev and for PyInstaller"""
+            try:
+                # PyInstaller creates a temp folder and stores path in _MEIPASS
+                base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+                return os.path.join(base_path, relative_path)
+            except Exception:
+                return relative_path
+                
+        # Different approach for frozen (executable) vs non-frozen (development) mode
+        if getattr(sys, 'frozen', False):
+            # Running as executable - use direct module import
+            print("Running in frozen mode - starting clip processor in a thread")
             
-            # Start the bot.py script
-            print("Starting clip_processor.py...")
-            self.process.start(python_exe, ["clip_processor.py"])
+            # Reset stop event for the new thread
+            self.stop_event.clear()
             
-            # Wait for process to start
-            if not self.process.waitForStarted(3000):  # 3 second timeout
-                QMessageBox.critical(self, "Error", "Failed to start clip_processor.py process. Check if Python is installed correctly.")
-                return
+            # Define the thread function to run the clip processor
+            def run_clip_processor():
+                try:
+                    print("Starting clip processor in thread...")
+                    
+                    # First, make sure all required packages are available
+                    try:
+                        import watchdog
+                        import ffmpeg
+                        print("All required packages are available")
+                    except ImportError as e:
+                        print(f"Error: Missing required package: {e}")
+                        print("Please install missing dependencies and try again.")
+                        print("You can run: pip install watchdog ffmpeg-python requests python-dotenv")
+                        return
+                    
+                    # Now try to import the clip_processor module directly
+                    # This is the simplest approach and will work well
+                    try:
+                        import clip_processor
+                        print("Successfully imported clip_processor module")
+                        
+                        # Run the clip processor with our stop event
+                        clip_processor.run(self.stop_event)
+                    except Exception as e:
+                        print(f"Error running clip processor: {e}")
+                        import traceback
+                        traceback.print_exc()
+                    
+                except Exception as e:
+                    print(f"Error in processor thread: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                print("Clip processor thread ended")
             
-            # Update UI buttons - disable start, enable stop
+            # Start the thread
+            self.processor_thread = threading.Thread(target=run_clip_processor)
+            self.processor_thread.daemon = True  # Make thread exit when main thread exits
+            self.processor_thread.start()
+            
+            # Update UI buttons
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
-            print("Process started successfully.")
-        except Exception as e:
-            print(f"Error starting monitoring process: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to start monitoring process: {e}")
+            print("Clip processor thread started successfully")
+            
+        else:
+            # Development mode - use subprocess approach
+            processor_path = "clip_processor.py"
+            if not os.path.exists(processor_path):
+                QMessageBox.critical(self, "Error", "clip_processor.py not found. Please ensure the file exists.")
+                return
+            
+            # Get Python executable path
+            python_exe = sys.executable
+            print(f"Using Python executable: {python_exe}")
+            print(f"Using processor path: {processor_path}")
+            print(f"Current working directory: {os.getcwd()}")
+            
+            try:
+                # Start the clip processor process
+                self.process = QProcess()
+                self.process.readyReadStandardOutput.connect(self.handle_stdout)
+                self.process.readyReadStandardError.connect(self.handle_stderr)
+                self.process.finished.connect(self.process_finished)
+                
+                # Set up correct environment 
+                env = QProcessEnvironment.systemEnvironment()
+                self.process.setProcessEnvironment(env)
+                
+                # Start the clip_processor.py script directly
+                print("Starting clip_processor.py in normal mode...")
+                self.process.start(python_exe, [processor_path])
+                
+                # Wait for process to start
+                if not self.process.waitForStarted(3000):  # 3 second timeout
+                    QMessageBox.critical(self, "Error", "Failed to start clip processor. Check if Python is installed correctly.")
+                    return
+                
+                # Update UI buttons - disable start, enable stop
+                self.start_button.setEnabled(False)
+                self.stop_button.setEnabled(True)
+                print("Process started successfully.")
+                
+            except Exception as e:
+                print(f"Error starting monitoring process: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to start monitoring process: {e}")
     
     def validate_settings(self):
-        # Validate all settings before starting the bot
+        # Validate all settings before starting the clip processor
         
         # Check if folders exist
         if not os.path.isdir(self.shadowplay_folder.text()):
@@ -1021,11 +968,30 @@ class AutoClipSenderGUI(QMainWindow):
         return True
     
     def stop_monitoring(self):
-        if self.process and self.process.state() == QProcess.Running:
-            print("Stopping monitoring...")
+        # Check if we're in frozen mode with a thread
+        if self.processor_thread and self.processor_thread.is_alive():
+            print("Stopping clip processor thread...")
+            self.stop_event.set()  # Signal the thread to stop
             
+            # Give the thread a moment to clean up
+            self.processor_thread.join(3.0)  # Wait up to 3 seconds for the thread to finish
+            
+            if self.processor_thread.is_alive():
+                print("Thread still running after 3s - it will be terminated when the app closes")
+                
+            # Update UI 
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            print("Monitoring stopped.")
+            return
+        
+        # Otherwise handle process-based stopping (development mode)
+        if self.process and self.process.state() == QProcess.Running:
             # Update UI to show we're in the process of stopping
-            self.statusBar().showMessage("Stopping the monitoring process... Please wait.")
+            self.statusBar().showMessage("Stopping monitoring process... Please wait.")
+            
+            remove_last_line(self.terminal_output)
+            
             self.terminal_output.append("[" + datetime.now().strftime('%H:%M:%S') + "] Stopping monitoring process... Please wait.")
             self.stop_button.setText("Stopping...")
             self.stop_button.setEnabled(False)  # Disable to prevent multiple clicks
@@ -1039,8 +1005,7 @@ class AutoClipSenderGUI(QMainWindow):
             
             # Give it 3 seconds to terminate gracefully
             if not self.process.waitForFinished(3000):
-                print("Force killing process...")
-                self.terminal_output.append("[" + datetime.now().strftime('%H:%M:%S') + "] Force killing unresponsive process...")
+                self.terminal_output.append("[" + datetime.now().strftime('%H:%M:%S') + "] Force killing unresponsive process...\n")
                 self.process.kill()
             
             # Restore UI
@@ -1079,55 +1044,22 @@ class AutoClipSenderGUI(QMainWindow):
         self.stop_button.setEnabled(False)
         
         if exit_code != 0:
-            print(f"Bot process exited with code {exit_code}")
+            print(f"Clip processor exited with code {exit_code}")
         else:
-            print("Bot process ended normally.")
+            print("Clip processor ended normally.")
     
     def closeEvent(self, event):
-        # Stop the bot process when closing the application
+        # Stop the clip processor when closing the application
         self.stop_monitoring()
         event.accept()
 
-    def reload_env_credentials(self):
-        """
-        Reload the Discord credentials from the .env file
-        """
+    def check_for_running_processor(self):
+        """Check if the clip processor is already running and update button states"""
         try:
-            # Reload dotenv in case the .env file was modified
-            from dotenv import load_dotenv
-            load_dotenv(override=True)
-            
-            # Update the webhook URL field
-            webhook_url = os.getenv("WEBHOOK_URL", "")
-            self.webhook_url.setText(webhook_url)
-            
-            print("Reloaded Discord webhook URL from .env file")
-        except Exception as e:
-            print(f"Error reloading environment variables: {e}")
-
-    def check_for_running_bot(self):
-        """Check if the bot process is already running and update button states"""
-        try:
-            # Different process checking methods for different operating systems
+            # Simplified process checking method for Windows
             if os.name == 'nt':  # Windows
-                try:
-                    import wmi
-                    f = wmi.WMI()
-                    # Look for clip_processor.py in process list
-                    for process in f.Win32_Process():
-                        if 'clip_processor.py' in process.CommandLine or 'clip_processor' in process.CommandLine:
-                            # Only show message if debug logging is enabled
-                            if os.getenv("DEBUG_LOGGING") == "1":
-                                print("Found running clip_processor.py process")
-                            # Update buttons to reflect the running state
-                            self.start_button.setEnabled(False)
-                            self.stop_button.setEnabled(True)
-                            return True
-                except ImportError:
-                    # WMI not installed, use alternative method - only log in debug mode
-                    if os.getenv("DEBUG_LOGGING") == "1":
-                        print("WMI module not available. Using alternative process detection method.")
                     import subprocess
+                # First check if any python processes exist
                     result = subprocess.run(['tasklist', '/fo', 'csv', '/nh'], capture_output=True, text=True)
                     if 'python' in result.stdout.lower():
                         # Check if any python process is running our script
@@ -1153,7 +1085,7 @@ class AutoClipSenderGUI(QMainWindow):
                     return True
         except Exception as e:
             if os.getenv("DEBUG_LOGGING") == "1":
-                print(f"Error checking for running bot: {e}")
+                print(f"Error checking for running clip processor: {e}")
             # Don't change button states if we couldn't check
             return False
         
