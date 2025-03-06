@@ -4,7 +4,7 @@ import traceback
 import json
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QSize
+from PyQt5.QtCore import QSize, Qt
 
 # Import our config helper to ensure config files exist in the right location
 import config_helper
@@ -45,113 +45,55 @@ if __name__ == '__main__':
         from gui import AutoClipSenderGUI
         app = QApplication(sys.argv)
         
-        # Create a composite icon from multiple sizes in the icons folder
-        app_icon = QIcon()
+        # Set application name and organization
+        app.setApplicationName("Auto Clip Sender")
+        app.setApplicationDisplayName("Auto Clip Sender")
+        app.setOrganizationName("Auto Clip Sender")
         
-        # --- DETAILED ICON DEBUGGING ---
-        print(f"Is running as executable: {getattr(sys, 'frozen', False)}")
+        # Look for the icon in the _internal folder first (for PyInstaller build)
+        # Then fallback to root directory (for development)
+        internal_icon_path = os.path.join(app_dir, '_internal', '128x128.ico')
+        root_icon_path = os.path.join(app_dir, '128x128.ico')
         
-        # Check for icons folder
-        icons_folder = os.path.join(app_dir, 'icons')
-        print(f"Looking for icons folder at: {icons_folder}")
-        print(f"Icons folder exists: {os.path.exists(icons_folder)}")
+        print(f"Looking for icon in _internal folder: {internal_icon_path}")
+        print(f"Icon exists in _internal: {os.path.exists(internal_icon_path)}")
         
-        # List contents of app directory to help debugging
-        print(f"Contents of application directory ({app_dir}):")
-        try:
-            for item in os.listdir(app_dir):
-                item_path = os.path.join(app_dir, item)
-                if os.path.isdir(item_path):
-                    print(f"  DIR: {item}")
-                else:
-                    print(f"  FILE: {item}")
-        except Exception as e:
-            print(f"Error listing directory contents: {e}")
+        print(f"Looking for icon in root: {root_icon_path}")
+        print(f"Icon exists in root: {os.path.exists(root_icon_path)}")
         
-        # Also check parent directory (in case icons is one level up)
-        parent_dir = os.path.dirname(app_dir)
-        icons_folder_parent = os.path.join(parent_dir, 'icons')
-        print(f"Alternative icons path: {icons_folder_parent}")
-        print(f"Alternative icons folder exists: {os.path.exists(icons_folder_parent)}")
+        # Choose the first available icon path
+        icon_path = None
+        if os.path.exists(internal_icon_path):
+            icon_path = internal_icon_path
+            print(f"Using icon from _internal folder")
+        elif os.path.exists(root_icon_path):
+            icon_path = root_icon_path
+            print(f"Using icon from root directory")
         
-        # Check for single icon file as fallback
-        single_icon_path = os.path.join(app_dir, 'icon.ico')
-        print(f"Fallback icon path: {single_icon_path}")
-        print(f"Fallback icon exists: {os.path.exists(single_icon_path)}")
-        
-        # Try looking for icons in multiple locations
-        possible_icon_locations = [
-            icons_folder,                               # Standard location
-            icons_folder_parent,                        # Parent directory
-            os.path.join(os.path.dirname(sys.executable), 'icons') if getattr(sys, 'frozen', False) else None,  # Executable directory
-            os.path.join(os.getcwd(), 'icons'),         # Current working directory
-            single_icon_path                            # Single icon file
-        ]
-        
-        # Find first valid icon location
-        valid_icon_location = None
-        for location in possible_icon_locations:
-            if location and os.path.exists(location):
-                print(f"Found valid icon location: {location}")
-                valid_icon_location = location
-                break
-                
-        if valid_icon_location:
-            # Load icons from the found location
-            if os.path.isdir(valid_icon_location):
-                # It's a directory, look for multiple icon files
-                print(f"Loading icons from directory: {valid_icon_location}")
-                print(f"Directory contents:")
-                try:
-                    for item in os.listdir(valid_icon_location):
-                        print(f"  {item}")
-                except Exception as e:
-                    print(f"Error listing icons directory: {e}")
-                
-                # Add each icon size to the QIcon
-                icon_sizes = ['16x16.ico', '32x32.ico', '48x48.ico', '64x64.ico', '128x128.ico']
-                for icon_file in icon_sizes:
-                    icon_path = os.path.join(valid_icon_location, icon_file)
-                    if os.path.exists(icon_path):
-                        # Extract size from filename (e.g., "16x16.ico" -> 16)
-                        try:
-                            size = int(icon_file.split('x')[0])
-                            app_icon.addFile(icon_path, QSize(size, size))
-                            print(f"Added icon size {size}x{size} from {icon_path}")
-                        except Exception as e:
-                            print(f"Error adding icon {icon_file}: {e}")
-            else:
-                # It's a single file
-                print(f"Loading single icon file: {valid_icon_location}")
-                app_icon.addFile(valid_icon_location)
-                
-            # Set the application icon
+        if icon_path:
+            app_icon = QIcon(icon_path)
             app.setWindowIcon(app_icon)
-            print(f"Icon set successfully: {not app_icon.isNull()}")
+            print(f"Set application icon from {icon_path}")
             
-            # Set application ID (Windows only)
+            # Set app ID for Windows (helps with taskbar icon)
             if os.name == 'nt':
                 try:
                     import ctypes
-                    # This helps Windows properly associate the icon with the application
                     app_id = "autoClipSender.1.0"
                     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
                     print(f"Set Windows Application User Model ID to: {app_id}")
                 except Exception as e:
                     print(f"Error setting application ID: {e}")
         else:
-            print("No valid icon location found.")
-        
-        # --- END ICON DEBUGGING ---
+            print("Icon file not found in any location.")
         
         # Create main window
         window = AutoClipSenderGUI()
         
-        # If we created an icon, also set it on the window explicitly
-        if not app_icon.isNull():
+        # If we set an app icon, also set it on the window
+        if 'app_icon' in locals() and not app_icon.isNull():
             window.setWindowIcon(app_icon)
-            print("Set window icon from app_icon")
-        
+            
         window.show()
         sys.exit(app.exec_())
     except Exception as e:

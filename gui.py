@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTabWidget, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QFileDialog, QMessageBox, QSplitter
 )
 from PyQt5.QtCore import Qt, QProcess, pyqtSignal, QObject, QProcessEnvironment, QSize
-from PyQt5.QtGui import QFont, QPalette, QColor, QTextCursor, QIcon
+from PyQt5.QtGui import QFont, QPalette, QColor, QTextCursor, QIcon, QPixmap
 
 # Import dotenv for environment variables - use absolute path
 from dotenv import load_dotenv
@@ -54,7 +54,8 @@ DEFAULT_CONFIG = {
     'CRF_STEP': 1,
     'EXTRACT_PRESET': "fast",
     'COMPRESSION_PRESET': "medium",
-    'COMPRESSION_METHOD': "Progressive",
+    'COMPRESSION_METHOD': "Quick",
+    'QUICK_CRF': 40,
     'CLIP_DURATION': 15,
     'HIGH_QUALITY_CRF': 18,
     'CLOSE_THRESHOLD': 0.9,
@@ -163,44 +164,36 @@ class AutoClipSenderGUI(QMainWindow):
         self.processor_thread = None
         self.stop_event = threading.Event()
         
-        # Try multiple approaches to set window icon using icons folder
-        icons_folder = os.path.join(APP_DIR, 'icons')
-        if os.path.exists(icons_folder):
-            # Create composite icon with all available sizes
-            window_icon = QIcon()
-            icon_sizes = ['16x16.ico', '32x32.ico', '48x48.ico', '64x64.ico', '128x128.ico']
+        # Look for the icon in the _internal folder first (for PyInstaller build)
+        # Then fallback to root directory (for development)
+        internal_icon_path = os.path.join(APP_DIR, '_internal', '128x128.ico')
+        root_icon_path = os.path.join(APP_DIR, '128x128.ico')
+        
+        # Choose the first available icon path
+        icon_path = None
+        if os.path.exists(internal_icon_path):
+            icon_path = internal_icon_path
+            print(f"GUI: Using icon from _internal folder")
+        elif os.path.exists(root_icon_path):
+            icon_path = root_icon_path
+            print(f"GUI: Using icon from root directory")
+        
+        if icon_path:
+            # Set the window icon directly
+            window_icon = QIcon(icon_path)
+            self.setWindowIcon(window_icon)
             
-            for icon_file in icon_sizes:
-                icon_path = os.path.join(icons_folder, icon_file)
-                if os.path.exists(icon_path):
-                    # Extract size from filename (e.g., "16x16.ico" -> 16)
-                    try:
-                        size = int(icon_file.split('x')[0])
-                        window_icon.addFile(icon_path, QSize(size, size))
-                        print(f"Added window icon size {size}x{size} from {icon_file}")
-                    except Exception as e:
-                        print(f"Error adding window icon {icon_file}: {e}")
-            
-            # Set the window icon
-            if not window_icon.isNull():
-                self.setWindowIcon(window_icon)
-                print("Set composite window icon from multiple files")
-            
-                # Also set the app user model ID for Windows
-                if os.name == 'nt':
-                    try:
-                        import ctypes
-                        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("autoClipSender.1.0")
-                    except Exception as e:
-                        print(f"Error setting app user model ID: {e}")
+            # Set app ID for Windows (helps with taskbar icon)
+            if os.name == 'nt':
+                try:
+                    import ctypes
+                    app_id = "autoClipSender.1.0"
+                    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+                    print(f"GUI: Set Windows Application User Model ID")
+                except Exception as e:
+                    print(f"GUI: Error setting application ID: {e}")
         else:
-            # Fallback to single icon file if folder doesn't exist
-            icon_path = os.path.join(APP_DIR, 'icon.ico')
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
-                print(f"Set window icon from single file: {icon_path}")
-            else:
-                print(f"No icons found at either {icons_folder} or {icon_path}")
+            print(f"GUI: Icon file not found in any location")
             
         self.init_ui()
         
@@ -214,9 +207,9 @@ class AutoClipSenderGUI(QMainWindow):
         # First try to get from user config
         if key in CONFIG:
             return CONFIG[key]
-            # If not in config, try to get from DEFAULT_VALUES
+        # If not in config, try to get from DEFAULT_VALUES
         elif key in DEFAULT_VALUES:
-                return DEFAULT_VALUES[key]
+            return DEFAULT_VALUES[key]
         else:
             # Last resort, return empty string
             print(f"Warning: Config value {key} not found in config.json or defaults.json")
@@ -548,12 +541,30 @@ class AutoClipSenderGUI(QMainWindow):
         self.compression_method.addItems(["Progressive", "Quick"])
         self.compression_method.setCurrentText(self.get_config_value('COMPRESSION_METHOD'))
         
+        # Quick CRF value setting
+        self.quick_crf = NoWheelSpinBox()
+        self.quick_crf.setRange(1, 51)
+        self.quick_crf.setValue(int(self.get_config_value('QUICK_CRF')))
+        
         # Help labels
         clip_duration_help = QLabel("Duration in seconds to extract from the end of each recording.")
         clip_duration_help.setWordWrap(True)
         
-        compression_method_help = QLabel("• Quick: Single pass compression that produces smaller files quickly (CRF=23)\n• Progressive: Multiple passes to find optimal quality-to-size ratio (slower but higher quality)")
+        # Compression method selector
+        self.compression_method = NoWheelComboBox()
+        self.compression_method.addItems(["Progressive", "Quick"])
+        self.compression_method.setCurrentText(self.get_config_value('COMPRESSION_METHOD'))
+        
+        # Quick CRF value setting
+        self.quick_crf = NoWheelSpinBox()
+        self.quick_crf.setRange(1, 51)
+        self.quick_crf.setValue(int(self.get_config_value('QUICK_CRF')))
+        
+        compression_method_help = QLabel("• Quick: Single pass compression that produces smaller files quickly\n• Progressive: Multiple passes to find optimal quality-to-size ratio (slower but higher quality)")
         compression_method_help.setWordWrap(True)
+        
+        quick_crf_help = QLabel("CRF value for Quick compression (1-51). Lower values = better quality but larger files. Higher values = worse quality but smaller files. Values above 35 may show noticeable quality loss.")
+        quick_crf_help.setWordWrap(True)
         
         # Add settings to clipping tab layout
         clipping_layout.addWidget(QLabel("Clip Duration (seconds):"))
@@ -564,6 +575,11 @@ class AutoClipSenderGUI(QMainWindow):
         clipping_layout.addWidget(QLabel("Compression Method:"))
         clipping_layout.addWidget(self.create_setting_row("Compression Method:", self.compression_method, 'COMPRESSION_METHOD')[1])
         clipping_layout.addWidget(compression_method_help)
+        clipping_layout.addSpacing(10)
+        
+        clipping_layout.addWidget(QLabel("Quick Compression CRF:"))
+        clipping_layout.addWidget(self.create_setting_row("Quick CRF:", self.quick_crf, 'QUICK_CRF')[1])
+        clipping_layout.addWidget(quick_crf_help)
         clipping_layout.addStretch()
 
         # COMPRESSION TAB
@@ -692,7 +708,11 @@ class AutoClipSenderGUI(QMainWindow):
         # Load default values
         try:
             defaults = config_helper.load_json_config(DEFAULTS_FILE)
-            
+            if not defaults:
+                raise ValueError("defaults.json could not be loaded")
+                
+            print("Restoring settings from defaults.json")
+                
             # Restore folder settings
             self.shadowplay_folder.setText(defaults.get('SHADOWPLAY_FOLDER', DEFAULT_CONFIG['SHADOWPLAY_FOLDER']))
             self.output_folder.setText(defaults.get('OUTPUT_FOLDER', DEFAULT_CONFIG['OUTPUT_FOLDER']))
@@ -707,19 +727,22 @@ class AutoClipSenderGUI(QMainWindow):
             self.clip_duration.setValue(defaults.get('CLIP_DURATION', DEFAULT_CONFIG['CLIP_DURATION']))
             self.high_quality_crf.setValue(defaults.get('HIGH_QUALITY_CRF', DEFAULT_CONFIG['HIGH_QUALITY_CRF']))
             
-            # Restore compression settings
+            # Restore compression settings - fix to use values from defaults.json
             self.crf_min.setValue(defaults.get('CRF_MIN', DEFAULT_CONFIG['CRF_MIN']))
             self.crf_max.setValue(defaults.get('CRF_MAX', DEFAULT_CONFIG['CRF_MAX']))
             self.crf_step.setValue(defaults.get('CRF_STEP', DEFAULT_CONFIG['CRF_STEP']))
             self.compression_method.setCurrentText(defaults.get('COMPRESSION_METHOD', DEFAULT_CONFIG['COMPRESSION_METHOD']))
+            self.quick_crf.setValue(defaults.get('QUICK_CRF', DEFAULT_CONFIG['QUICK_CRF']))
             
             # Restore FFmpeg presets
             self.extract_preset.setCurrentText(defaults.get('EXTRACT_PRESET', DEFAULT_CONFIG['EXTRACT_PRESET']))
             self.compression_preset.setCurrentText(defaults.get('COMPRESSION_PRESET', DEFAULT_CONFIG['COMPRESSION_PRESET']))
             
-            print("Values restored from defaults.json")
+            print("Settings restored from defaults.json")
         except Exception as e:
-            print(f"Error restoring defaults: {e}")
+            print(f"Error restoring from defaults.json: {e}")
+            print("Falling back to hardcoded DEFAULT_CONFIG")
+            
             # Fall back to DEFAULT_CONFIG if defaults.json has issues
             self.shadowplay_folder.setText(DEFAULT_CONFIG['SHADOWPLAY_FOLDER'])
             self.output_folder.setText(DEFAULT_CONFIG['OUTPUT_FOLDER'])
@@ -739,6 +762,7 @@ class AutoClipSenderGUI(QMainWindow):
             self.crf_max.setValue(DEFAULT_CONFIG['CRF_MAX'])
             self.crf_step.setValue(DEFAULT_CONFIG['CRF_STEP'])
             self.compression_method.setCurrentText(DEFAULT_CONFIG['COMPRESSION_METHOD'])
+            self.quick_crf.setValue(DEFAULT_CONFIG['QUICK_CRF'])
             
             # Restore FFmpeg presets
             self.extract_preset.setCurrentText(DEFAULT_CONFIG['EXTRACT_PRESET'])
@@ -752,7 +776,7 @@ class AutoClipSenderGUI(QMainWindow):
         QMessageBox.information(self, "Defaults Restored", "All settings except webhook URL have been restored to defaults. Click 'Save Configuration' to apply these changes.")
     
     def save_configuration(self):
-        # Prepare config dictionary
+        # Prepare config dictionary with values from UI elements
         config = {
             'SHADOWPLAY_FOLDER': self.shadowplay_folder.text(),
             'OUTPUT_FOLDER': self.output_folder.text(),
@@ -765,28 +789,46 @@ class AutoClipSenderGUI(QMainWindow):
             'CRF_STEP': self.crf_step.value(),
             'EXTRACT_PRESET': self.extract_preset.currentText(),
             'COMPRESSION_PRESET': self.compression_preset.currentText(),
-            'COMPRESSION_METHOD': self.compression_method.currentText(),
             'CLIP_DURATION': self.clip_duration.value(),
             'HIGH_QUALITY_CRF': self.high_quality_crf.value(),
-            'CLOSE_THRESHOLD': 0.9,
-            'MEDIUM_THRESHOLD': 0.75,
-            'FAR_THRESHOLD': 0.5,
-            'WEBHOOK_URL': self.webhook_url.text().strip()
+            'QUICK_CRF': self.quick_crf.value(),
+            'WEBHOOK_URL': self.webhook_url.text(),
+            'COMPRESSION_METHOD': self.compression_method.currentText()
         }
-
-        # Save to config.json using config_helper
-        if config_helper.save_json_config(config, CONFIG_FILE):
-            # The config_helper already prints a save message, so we don't need to duplicate it
-            # Update global CONFIG dictionary
-            global CONFIG
-            CONFIG = config
-                
-            if self.statusBar():
-                self.statusBar().showMessage("Configuration saved successfully", 3000)
-            return True
+        
+        # Add threshold values from CONFIG (these don't have UI elements)
+        global CONFIG
+        if 'CLOSE_THRESHOLD' in CONFIG:
+            config['CLOSE_THRESHOLD'] = CONFIG['CLOSE_THRESHOLD']
         else:
-            QMessageBox.critical(self, "Error", "Failed to save configuration")
-            return False
+            config['CLOSE_THRESHOLD'] = DEFAULT_CONFIG['CLOSE_THRESHOLD']
+            
+        if 'MEDIUM_THRESHOLD' in CONFIG:
+            config['MEDIUM_THRESHOLD'] = CONFIG['MEDIUM_THRESHOLD']
+        else:
+            config['MEDIUM_THRESHOLD'] = DEFAULT_CONFIG['MEDIUM_THRESHOLD']
+            
+        if 'FAR_THRESHOLD' in CONFIG:
+            config['FAR_THRESHOLD'] = CONFIG['FAR_THRESHOLD']
+        else:
+            config['FAR_THRESHOLD'] = DEFAULT_CONFIG['FAR_THRESHOLD']
+        
+        # Save to config.json
+        try:
+            # Save config to the config.json file
+            if config_helper.save_json_config('config.json', config):
+                print("Configuration saved successfully")
+                # Update our in-memory config
+                CONFIG = config
+                
+                # Show success message in status bar
+                self.statusBar().showMessage("Configuration saved successfully", 3000)
+            else:
+                print("Error saving configuration")
+                QMessageBox.warning(self, "Error", "Failed to save configuration.")
+        except Exception as e:
+            print(f"Error saving configuration: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to save configuration: {str(e)}")
 
     def test_webhook(self):
         """
@@ -826,62 +868,38 @@ class AutoClipSenderGUI(QMainWindow):
         if not self.validate_settings():
             return
         
-        # Save the configuration
+        # Save configuration before starting
+        print("Saving configuration before starting monitoring...")
         self.save_configuration()
-        
-        # Get the resource path - handles both normal and PyInstaller modes
-        def resource_path(relative_path):
-            """Get absolute path to resource, works for dev and for PyInstaller"""
-            try:
-                # PyInstaller creates a temp folder and stores path in _MEIPASS
-                base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-                return os.path.join(base_path, relative_path)
-            except Exception:
-                return relative_path
-                
-        # Different approach for frozen (executable) vs non-frozen (development) mode
-        if getattr(sys, 'frozen', False):
-            # Running as executable - use direct module import
-            print("Running in frozen mode - starting clip processor in a thread")
             
-            # Reset stop event for the new thread
+        # Check if we're running in frozen mode
+        if getattr(sys, 'frozen', False):
+            print("Starting clip monitoring in executable mode...")
+            
+            # Create a stop event for the processor
             self.stop_event.clear()
             
-            # Define the thread function to run the clip processor
+            # Define a function to run the clip processor in a thread
             def run_clip_processor():
                 try:
-                    print("Starting clip processor in thread...")
+                    # Import clip_processor module
+                    import clip_processor
                     
-                    # First, make sure all required packages are available
-                    try:
-                        import watchdog
-                        import ffmpeg
-                        print("All required packages are available")
-                    except ImportError as e:
-                        print(f"Error: Missing required package: {e}")
-                        print("Please install missing dependencies and try again.")
-                        print("You can run: pip install watchdog ffmpeg-python requests python-dotenv")
-                        return
+                    # Run the clip processor with our stop event
+                    clip_processor.run(self.stop_event)
                     
-                    # Now try to import the clip_processor module directly
-                    # This is the simplest approach and will work well
-                    try:
-                        import clip_processor
-                        print("Successfully imported clip_processor module")
-                        
-                        # Run the clip processor with our stop event
-                        clip_processor.run(self.stop_event)
-                    except Exception as e:
-                        print(f"Error running clip processor: {e}")
-                        import traceback
-                        traceback.print_exc()
-                    
+                    # Reset the UI when the thread exits
+                    self.start_button.setEnabled(True)
+                    self.stop_button.setEnabled(False)
                 except Exception as e:
-                    print(f"Error in processor thread: {e}")
+                    print(f"Error in clip processor thread: {e}")
+                    # Import traceback here to avoid circular import
                     import traceback
                     traceback.print_exc()
-                
-                print("Clip processor thread ended")
+                    
+                    # Show error in UI
+                    self.start_button.setEnabled(True)
+                    self.stop_button.setEnabled(False)
             
             # Start the thread
             self.processor_thread = threading.Thread(target=run_clip_processor)
@@ -891,20 +909,15 @@ class AutoClipSenderGUI(QMainWindow):
             # Update UI buttons
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
-            print("Clip processor thread started successfully")
-            
         else:
             # Development mode - use subprocess approach
             processor_path = "clip_processor.py"
             if not os.path.exists(processor_path):
                 QMessageBox.critical(self, "Error", "clip_processor.py not found. Please ensure the file exists.")
                 return
-            
+        
             # Get Python executable path
             python_exe = sys.executable
-            print(f"Using Python executable: {python_exe}")
-            print(f"Using processor path: {processor_path}")
-            print(f"Current working directory: {os.getcwd()}")
             
             try:
                 # Start the clip processor process
@@ -912,24 +925,23 @@ class AutoClipSenderGUI(QMainWindow):
                 self.process.readyReadStandardOutput.connect(self.handle_stdout)
                 self.process.readyReadStandardError.connect(self.handle_stderr)
                 self.process.finished.connect(self.process_finished)
-                
+            
                 # Set up correct environment 
                 env = QProcessEnvironment.systemEnvironment()
                 self.process.setProcessEnvironment(env)
                 
                 # Start the clip_processor.py script directly
-                print("Starting clip_processor.py in normal mode...")
+                print("Starting clip monitoring in development mode...")
                 self.process.start(python_exe, [processor_path])
-                
+            
                 # Wait for process to start
                 if not self.process.waitForStarted(3000):  # 3 second timeout
                     QMessageBox.critical(self, "Error", "Failed to start clip processor. Check if Python is installed correctly.")
                     return
-                
+            
                 # Update UI buttons - disable start, enable stop
                 self.start_button.setEnabled(False)
                 self.stop_button.setEnabled(True)
-                print("Process started successfully.")
                 
             except Exception as e:
                 print(f"Error starting monitoring process: {e}")
@@ -969,59 +981,47 @@ class AutoClipSenderGUI(QMainWindow):
     
     def stop_monitoring(self):
         # Check if we're in frozen mode with a thread
-        if self.processor_thread and self.processor_thread.is_alive():
-            print("Stopping clip processor thread...")
-            self.stop_event.set()  # Signal the thread to stop
+        if getattr(sys, 'frozen', False) and self.processor_thread is not None:
+            print("Stopping clip monitoring...")
+            # Signal the thread to stop
+            self.stop_event.set()
             
-            # Give the thread a moment to clean up
-            self.processor_thread.join(3.0)  # Wait up to 3 seconds for the thread to finish
-            
+            # Wait for thread to complete (with timeout)
             if self.processor_thread.is_alive():
-                print("Thread still running after 3s - it will be terminated when the app closes")
+                self.processor_thread.join(timeout=1.0)
                 
-            # Update UI 
-            self.start_button.setEnabled(True)
-            self.stop_button.setEnabled(False)
-            print("Monitoring stopped.")
-            return
-        
-        # Otherwise handle process-based stopping (development mode)
-        if self.process and self.process.state() == QProcess.Running:
-            # Update UI to show we're in the process of stopping
-            self.statusBar().showMessage("Stopping monitoring process... Please wait.")
-            
-            remove_last_line(self.terminal_output)
-            
-            self.terminal_output.append("[" + datetime.now().strftime('%H:%M:%S') + "] Stopping monitoring process... Please wait.")
-            self.stop_button.setText("Stopping...")
-            self.stop_button.setEnabled(False)  # Disable to prevent multiple clicks
-            QApplication.setOverrideCursor(Qt.WaitCursor)  # Show wait cursor
-            
-            # Use a timer to allow the UI to update before blocking on process termination
-            QApplication.processEvents()
-            
-            # Terminate the process
-            self.process.terminate()
-            
-            # Give it 3 seconds to terminate gracefully
-            if not self.process.waitForFinished(3000):
-                self.terminal_output.append("[" + datetime.now().strftime('%H:%M:%S') + "] Force killing unresponsive process...\n")
-                self.process.kill()
-            
-            # Restore UI
-            QApplication.restoreOverrideCursor()  # Restore normal cursor
-            self.stop_button.setText("Stop Monitoring")
+            # Reset thread reference
+            self.processor_thread = None
             
             # Update UI buttons - enable start, disable stop
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
-            self.statusBar().showMessage("Monitoring stopped", 3000)
-            print("Monitoring stopped.")
+        elif self.process is not None:
+            # Development mode with process
+            print("Stopping clip monitoring process...")
+            try:
+                # Try to terminate the process gracefully
+                self.process.terminate()
+                
+                # Wait for it to terminate
+                if not self.process.waitForFinished(3000):  # 3 second timeout
+                    # If it doesn't terminate, kill it
+                    self.process.kill()
+                    print("Process killed.")
+                
+                # Update UI buttons - enable start, disable stop
+                self.start_button.setEnabled(True)
+                self.stop_button.setEnabled(False)
+                
+                # Reset process reference
+                self.process = None
+            except Exception as e:
+                print(f"Error stopping process: {e}")
         else:
-            # Process not running
+            print("No running clip processor to stop")
+            # Update UI buttons - enable start, disable stop
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
-            self.statusBar().showMessage("No monitoring process to stop", 3000)
     
     def handle_stdout(self):
         data = self.process.readAllStandardOutput().data().decode('utf-8')

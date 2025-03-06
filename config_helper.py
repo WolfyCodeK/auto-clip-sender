@@ -8,81 +8,73 @@ import shutil
 from pathlib import Path
 
 def get_application_path():
-    """Get the application path, works for both script and executable"""
+    """Get the application path for both script and frozen executable modes"""
     if getattr(sys, 'frozen', False):
-        # Running as compiled executable
+        # Running as executable
         return os.path.dirname(sys.executable)
     else:
         # Running as script
         return os.path.dirname(os.path.abspath(__file__))
 
 def get_user_config_dir():
+    """Get the directory for user configuration files
+    This now always returns the application directory to keep everything in one place
     """
-    Get the configuration directory - now always uses the application directory
-    to make the app portable with all data in one place
-    """
-    # Simply return the application path to make the app fully portable
     return get_application_path()
 
 def get_config_file_path(filename):
-    """Get the full path to a configuration file"""
-    # Just use the application directory for config files
-    app_path = os.path.join(get_application_path(), filename)
-    return app_path
-
-def ensure_config_files():
-    """
-    Ensure that necessary configuration files exist
-    """
+    """Get the full path for a configuration file"""
     app_dir = get_application_path()
-    
-    # List of configuration files to check
-    config_files = ['config.json', 'defaults.json']
-    
-    for filename in config_files:
-        app_path = os.path.join(app_dir, filename)
-        
-        # If file doesn't exist, we'll create it when needed
-        if not os.path.exists(app_path):
-            print(f"Configuration file not found: {app_path}")
+    return os.path.join(app_dir, filename)
 
 def load_json_config(filename):
-    """
-    Load a JSON configuration file
-    """
+    """Load a JSON configuration file with proper error handling"""
     try:
         config_path = get_config_file_path(filename)
-        print(f"Loading configuration from: {config_path}")
-        
-        if not os.path.exists(config_path):
-            print(f"Configuration file not found: {config_path}")
-            return {}
-        
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        
-        print(f"Loaded configuration from {config_path}")
-        return config
+        if os.path.exists(config_path):
+            # Less verbose logging
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            print(f"Config file not found: {config_path}")
+            return None
     except Exception as e:
-        print(f"Error loading configuration from {filename}: {e}")
-        return {}
+        print(f"Error loading configuration file {filename}: {e}")
+        return None
 
-def save_json_config(config, filename):
-    """
-    Save a configuration to a JSON file in the application directory
-    """
+def save_json_config(filename, data):
+    """Save data to a JSON configuration file"""
     try:
-        # Save the config to the application directory
         config_path = get_config_file_path(filename)
+        # Less verbose logging
         
-        # Save the config
-        with open(config_path, 'w') as f:
-            json.dump(config, f, indent=4)
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
         
-        print(f"Saved configuration to {config_path}")
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
         return True
     except Exception as e:
-        print(f"Error saving configuration to {filename}: {e}")
+        print(f"Error saving configuration file {filename}: {e}")
+        return False
+
+def ensure_config_files():
+    """Ensure that all required configuration files exist"""
+    try:
+        # Check if config.json exists, if not, create it from defaults.json
+        config_path = get_config_file_path('config.json')
+        if not os.path.exists(config_path):
+            # Try to load defaults.json
+            defaults = load_json_config('defaults.json')
+            if defaults:
+                # Save defaults as the new config
+                save_json_config('config.json', defaults)
+                print("Created config.json from defaults.json")
+            else:
+                print("Could not create config.json - defaults.json not found")
+        return True
+    except Exception as e:
+        print(f"Error ensuring config files: {e}")
         return False
 
 # Initialize on module import

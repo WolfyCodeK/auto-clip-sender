@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('icons', 'icons'), ('clip_processor.py', '.'), ('defaults.json', '.'), ('config.json', '.')],
+    datas=[('128x128.ico', '_internal'), ('clip_processor.py', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -31,7 +31,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icons\\64x64.ico'],
+    icon=['128x128.ico'],
 )
 coll = COLLECT(
     exe,

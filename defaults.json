@@ -6,15 +6,16 @@
     "TARGET_SIZE_MB": 9.0,
     "MAX_COMPRESSION_ATTEMPTS": 5,
     "CRF_MIN": 1,
-    "CRF_MAX": 30,
+    "CRF_MAX": 50,
     "CRF_STEP": 1,
     "EXTRACT_PRESET": "fast",
     "COMPRESSION_PRESET": "medium",
     "COMPRESSION_METHOD": "Quick",
-    "CLIP_DURATION": 15,
+    "CLIP_DURATION": 10,
     "HIGH_QUALITY_CRF": 18,
     "CLOSE_THRESHOLD": 0.9,
     "MEDIUM_THRESHOLD": 0.75,
     "FAR_THRESHOLD": 0.5,
-    "WEBHOOK_URL": ""
+    "WEBHOOK_URL": "",
+    "QUICK_CRF": 35
 }

@@ -19,34 +19,6 @@ import subprocess
 # Import our config helper for proper path handling
 import config_helper
 
-# Patch subprocess and ffmpeg to hide all console windows on Windows
-if os.name == 'nt':
-    # Store the original Popen class
-    original_popen = subprocess.Popen
-    
-    # Create a patched version that hides console windows
-    class NoConsolePopen(subprocess.Popen):
-        def __init__(self, *args, **kwargs):
-            # Add creationflags to hide console window
-            if 'creationflags' not in kwargs:
-                kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
-            super().__init__(*args, **kwargs)
-    
-    # Replace the original Popen with our patched version
-    subprocess.Popen = NoConsolePopen
-    
-    # Also directly patch the ffmpeg run method for good measure
-    original_ffmpeg_run = ffmpeg._run.run
-    
-    def patched_ffmpeg_run(cmd, **kwargs):
-        if 'creationflags' not in kwargs:
-            kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
-        return original_ffmpeg_run(cmd, **kwargs)
-    
-    ffmpeg._run.run = patched_ffmpeg_run
-    
-    print("Successfully patched subprocess and ffmpeg to hide console windows")
-
 # Get application path for executable/script mode
 application_path = config_helper.get_application_path()
 config_dir = config_helper.get_user_config_dir()
@@ -55,7 +27,11 @@ config_dir = config_helper.get_user_config_dir()
 CONFIG_FILE = 'config.json'
 DEFAULTS_FILE = 'defaults.json'
 
-# Set up default config
+# Compression method constants
+COMPRESSION_PROGRESSIVE = "Progressive"  # Current multi-pass approach
+COMPRESSION_QUICK = "Quick"  # Simple one-pass approach with high quality
+
+# Default config definition
 DEFAULT_CONFIG = {
     'SHADOWPLAY_FOLDER': "",
     'OUTPUT_FOLDER': "",
@@ -74,12 +50,33 @@ DEFAULT_CONFIG = {
     'MEDIUM_THRESHOLD': 0.75,
     'FAR_THRESHOLD': 0.5,
     'WEBHOOK_URL': "",
-    'COMPRESSION_METHOD': "Progressive"  # New option: "Progressive" or "Quick"
+    'COMPRESSION_METHOD': COMPRESSION_QUICK,
+    'QUICK_CRF': 40  # New setting for the CRF value used in Quick compression method
 }
 
-# Compression method constants
-COMPRESSION_PROGRESSIVE = "Progressive"  # Current multi-pass approach
-COMPRESSION_QUICK = "Quick"  # Simple one-pass approach with high quality
+# Global variables
+CONFIG = None
+WEBHOOK_URL = None
+SHADOWPLAY_FOLDER = None
+OUTPUT_FOLDER = None
+MIN_SIZE_MB = None
+MAX_SIZE_MB = None
+TARGET_SIZE_MB = None
+MAX_COMPRESSION_ATTEMPTS = None
+CRF_MIN = None
+CRF_MAX = None
+CRF_STEP = None
+EXTRACT_PRESET = None
+COMPRESSION_PRESET = None
+CLIP_DURATION = None
+HIGH_QUALITY_CRF = None
+CLOSE_THRESHOLD = None
+MEDIUM_THRESHOLD = None
+FAR_THRESHOLD = None
+COMPRESSION_METHOD = None
+QUICK_CRF = None  # New global variable
+global_observer = None
+global_stop_event = None
 
 def load_config():
     """Load configuration with fallback to defaults"""
@@ -99,11 +96,8 @@ def load_config():
             config['COMPRESSION_METHOD'] = DEFAULT_CONFIG['COMPRESSION_METHOD']
             print(f"Added new configuration option: COMPRESSION_METHOD = {config['COMPRESSION_METHOD']}")
         
-        # Print the loaded config for debugging (without webhook)
-        debug_config = config.copy()
-        if 'WEBHOOK_URL' in debug_config:
-            debug_config['WEBHOOK_URL'] = '[CONFIGURED]' if debug_config['WEBHOOK_URL'] else '[NOT CONFIGURED]'
-        print(f"Loaded configuration: {json.dumps(debug_config, indent=2)}")
+        # Print a more concise configuration summary
+        print(f"Configuration loaded successfully")
         
         # Verify webhook URL exists
         webhook_url = config.get('WEBHOOK_URL', '')
@@ -116,43 +110,6 @@ def load_config():
         print(f"Error loading configuration: {e}")
         traceback.print_exc()
         return None
-
-# Load configuration
-CONFIG = load_config()
-if not CONFIG:
-    print("Failed to load configuration. Exiting.")
-    sys.exit(1)
-
-# Get webhook URL from config
-WEBHOOK_URL = CONFIG.get('WEBHOOK_URL', '')
-if not WEBHOOK_URL:
-    print("No webhook URL configured. Please set it in the application settings.")
-    sys.exit(1)
-
-# Other configuration values
-SHADOWPLAY_FOLDER = CONFIG.get('SHADOWPLAY_FOLDER', '')
-OUTPUT_FOLDER = CONFIG.get('OUTPUT_FOLDER', '')
-MIN_SIZE_MB = CONFIG.get('MIN_SIZE_MB', 8.0)
-MAX_SIZE_MB = CONFIG.get('MAX_SIZE_MB', 10.0)
-TARGET_SIZE_MB = CONFIG.get('TARGET_SIZE_MB', 9.0)
-MAX_COMPRESSION_ATTEMPTS = CONFIG.get('MAX_COMPRESSION_ATTEMPTS', 5)
-CRF_MIN = CONFIG.get('CRF_MIN', 1)
-CRF_MAX = CONFIG.get('CRF_MAX', 30)
-CRF_STEP = CONFIG.get('CRF_STEP', 1)
-EXTRACT_PRESET = CONFIG.get('EXTRACT_PRESET', 'fast')
-COMPRESSION_PRESET = CONFIG.get('COMPRESSION_PRESET', 'medium')
-CLIP_DURATION = CONFIG.get('CLIP_DURATION', 15)
-HIGH_QUALITY_CRF = CONFIG.get('HIGH_QUALITY_CRF', 18)
-CLOSE_THRESHOLD = CONFIG.get('CLOSE_THRESHOLD', 0.9)
-MEDIUM_THRESHOLD = CONFIG.get('MEDIUM_THRESHOLD', 0.75)
-FAR_THRESHOLD = CONFIG.get('FAR_THRESHOLD', 0.5)
-COMPRESSION_METHOD = CONFIG.get('COMPRESSION_METHOD', COMPRESSION_PROGRESSIVE)
-
-# Display loaded settings for debugging
-print(f"Loaded SHADOWPLAY_FOLDER: {SHADOWPLAY_FOLDER}")
-print(f"Loaded OUTPUT_FOLDER: {OUTPUT_FOLDER}")
-print(f"Loaded COMPRESSION_METHOD: {COMPRESSION_METHOD}")
-print(f"Loaded size settings: MIN={MIN_SIZE_MB}MB, MAX={MAX_SIZE_MB}MB, TARGET={TARGET_SIZE_MB}MB")
 
 class ClipHandler(FileSystemEventHandler):
     def on_created(self, event):
@@ -214,9 +171,9 @@ def process_clip(filepath):
     
     # Check if the file is long enough to trim
     if duration < CLIP_DURATION:  # If the file is shorter than our clip duration, skip processing
-        print(f"Skipping {filepath} because it's too short to trim.")
-        return
-
+        print(f"Video {filepath} is shorter than clip duration ({duration:.2f}s < {CLIP_DURATION}s). Processing entire video instead of trimming.")
+        start_time = 0  # Use the entire video instead of trying to trim
+    
     # Get video width and height
     video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
     width = int(video_stream['width'])
@@ -227,7 +184,7 @@ def process_clip(filepath):
 
     # Trim last X seconds and save to a temporary file with high quality
     # This will be our source for compression iterations
-    print(f"Extracting last {CLIP_DURATION} seconds with high quality...")
+    print(f"Extracting {'last ' + str(CLIP_DURATION) + ' seconds' if duration >= CLIP_DURATION else 'entire video'} with high quality...")
     ffmpeg.input(filepath, ss=start_time).output(
         temp_filepath, 
         vcodec='libx264', 
@@ -249,16 +206,16 @@ def process_clip(filepath):
     # Choose the right compression method based on user setting
     if COMPRESSION_METHOD == COMPRESSION_QUICK:
         # Quick method: Just use a single pass with a moderate CRF value for faster processing
-        print(f"Using Quick compression method (single pass with CRF=23)")
+        print(f"Using Quick compression method (single pass with CRF={QUICK_CRF})")
         quick_filepath = os.path.join(OUTPUT_FOLDER, f"quick_{final_filename}")
         
         try:
-            # Use CRF=23 for good balance of quality and size
+            # Use configurable CRF value for file size control
             ffmpeg.input(temp_filepath).output(
                 quick_filepath, 
                 vcodec='libx264', 
                 acodec='aac', 
-                crf=23,  # Changed from 1 to 23 for smaller file size
+                crf=QUICK_CRF,  # Use the configurable QUICK_CRF value
                 preset=COMPRESSION_PRESET
             ).run(overwrite_output=True)
             
@@ -412,40 +369,68 @@ def process_clip(filepath):
                     if target_results:
                         # Find the one closest to the middle of our range (9MB)
                         best_result = min(target_results, key=lambda r: abs(r[1] - TARGET_SIZE_MB))
+                        print(f"Found file in target range! Using it: CRF={best_result[0]}, size={best_result[1]:.2f}MB")
                     else:
-                        # If none are in range, get the largest one that's still under our max
-                        best_result = max(valid_results, key=lambda r: r[1])
-                        best_crf, best_size, best_filepath = best_result
+                        # No file is in our target range
+                        print(f"No file in target range ({MIN_SIZE_MB}-{MAX_SIZE_MB}MB). Starting dedicated fine-tuning phase.")
                         
-                        # If no file is in target range, try a more aggressive fine-tuning approach
-                        # This will attempt multiple CRF values in sequence until we reach the target range
-                        if best_size < MIN_SIZE_MB:
-                            print(f"Best result ({best_size:.2f}MB) below target range. Trying progressive fine-tuning.")
-                            current_crf = best_crf
+                        # Sort all results by file size for easier analysis
+                        all_results_sorted = sorted(results, key=lambda r: r[1])
+                        
+                        # Find the file closest to but under MIN_SIZE_MB (our starting point for increasing quality)
+                        files_below_min = [r for r in valid_results if r[1] < MIN_SIZE_MB]
+                        
+                        if files_below_min:
+                            # Start with the largest file under MIN_SIZE_MB
+                            current_best = max(files_below_min, key=lambda r: r[1])
+                            current_crf, current_size, current_path = current_best
                             
-                            # Try up to 3 more CRF values, decreasing by 1-3 each time based on how close we are
-                            for i in range(3):  # We'll try up to 3 more attempts
-                                if current_crf <= CRF_MIN:
-                                    break  # Can't go lower than configured min
-                                    
-                                # Calculate how much to decrease CRF by
-                                if best_size >= MIN_SIZE_MB * CLOSE_THRESHOLD:  # Very close
-                                    crf_change = CRF_STEP  # Fine adjustment
-                                elif best_size >= MIN_SIZE_MB * MEDIUM_THRESHOLD:  # Close
-                                    crf_change = CRF_STEP * 2  # Medium adjustment
-                                else:
-                                    crf_change = CRF_STEP * 3  # Large adjustment
-                                    
-                                # Don't go below configured minimum
-                                next_crf = max(current_crf - crf_change, CRF_MIN)
+                            print(f"Starting fine-tuning from CRF={current_crf}, size={current_size:.2f}MB")
+                            
+                            # Try up to MAX_COMPRESSION_ATTEMPTS (or remaining attempts) to reach target range
+                            used_crfs = [r[0] for r in results]  # Track CRF values we've already tried
+                            attempts_left = MAX_COMPRESSION_ATTEMPTS - min(len(results), MAX_COMPRESSION_ATTEMPTS)
+                            attempts_limit = min(attempts_left + 2, 5)  # Cap at 5 but ensure at least 2 attempts
+                            
+                            for i in range(attempts_limit):
+                                # Calculate how far we are from target range as a percentage
+                                distance_pct = (MIN_SIZE_MB - current_size) / MIN_SIZE_MB
+                                
+                                # Adjust CRF based on how far we are from target
+                                if distance_pct > 0.5:  # Very far below (< 50% of min)
+                                    crf_change = min(current_crf - CRF_MIN, 6)  # Aggressive change
+                                    print(f"Very far from target ({distance_pct*100:.1f}% below). Making large CRF change: {crf_change}")
+                                elif distance_pct > 0.3:  # Significantly below
+                                    crf_change = min(current_crf - CRF_MIN, 4)  # Moderate change
+                                    print(f"Far from target ({distance_pct*100:.1f}% below). Making moderate CRF change: {crf_change}")
+                                elif distance_pct > 0.1:  # Somewhat below
+                                    crf_change = min(current_crf - CRF_MIN, 2)  # Small change
+                                    print(f"Approaching target ({distance_pct*100:.1f}% below). Making small CRF change: {crf_change}")
+                                else:  # Very close
+                                    crf_change = 1  # Minimal change
+                                    print(f"Very close to target ({distance_pct*100:.1f}% below). Making minimal CRF change: {crf_change}")
+                                
+                                # Calculate new CRF value (lower CRF = higher quality, larger file)
+                                new_crf = max(current_crf - crf_change, CRF_MIN)
                                 
                                 # Skip if we've already tried this value
-                                if any(r[0] == next_crf for r in results):
-                                    next_crf = max(next_crf - CRF_STEP, CRF_MIN)  # Try one step lower
-                                    if any(r[0] == next_crf for r in results):
-                                        break  # We've already tried this too, give up
+                                if new_crf in used_crfs:
+                                    print(f"Already tried CRF={new_crf}, looking for alternate value")
+                                    
+                                    # Try to find an untried CRF value between current and minimum
+                                    found_new_crf = False
+                                    for test_crf in range(current_crf - 1, CRF_MIN - 1, -1):
+                                        if test_crf not in used_crfs:
+                                            new_crf = test_crf
+                                            found_new_crf = True
+                                            print(f"Selected alternate CRF={new_crf}")
+                                            break
+                                    
+                                    if not found_new_crf:
+                                        print(f"No untried CRF values left. Using best available result.")
+                                        break  # Exit the loop if we can't find a new value
                                 
-                                print(f"Fine-tuning attempt {i+1}/3: Trying CRF={next_crf}")
+                                print(f"Fine-tuning attempt {i+1}/{attempts_limit}: Trying CRF={new_crf} (target: {MIN_SIZE_MB}-{MAX_SIZE_MB}MB)")
                                 fine_tune_filepath = os.path.join(OUTPUT_FOLDER, f"finetune{i}_{final_filename}")
                                 
                                 try:
@@ -453,41 +438,72 @@ def process_clip(filepath):
                                         fine_tune_filepath, 
                                         vcodec='libx264', 
                                         acodec='aac', 
-                                        crf=next_crf,
+                                        crf=new_crf,
                                         preset=COMPRESSION_PRESET
                                     ).run(overwrite_output=True)
+                                    
+                                    used_crfs.append(new_crf)  # Mark this CRF as tried
                                     
                                     if os.path.exists(fine_tune_filepath):
                                         fine_tune_size = os.path.getsize(fine_tune_filepath) / (1024 * 1024)
                                         print(f"Fine-tune attempt {i+1} produced: {fine_tune_size:.2f}MB")
                                         
                                         # Add to our results
-                                        results.append((next_crf, fine_tune_size, fine_tune_filepath))
+                                        results.append((new_crf, fine_tune_size, fine_tune_filepath))
                                         
                                         # If we've reached target range, we can stop
                                         if MIN_SIZE_MB <= fine_tune_size <= MAX_SIZE_MB:
-                                            print(f"Found file in target range! CRF={next_crf}, size={fine_tune_size:.2f}MB")
-                                            best_result = (next_crf, fine_tune_size, fine_tune_filepath)
+                                            print(f"Found file in target range! CRF={new_crf}, size={fine_tune_size:.2f}MB")
+                                            best_result = (new_crf, fine_tune_size, fine_tune_filepath)
                                             break
                                         
-                                        # If this is better than our previous best (closer to target), update it
-                                        if fine_tune_size <= MAX_SIZE_MB and fine_tune_size > best_size:
-                                            best_result = (next_crf, fine_tune_size, fine_tune_filepath)
-                                            best_size = fine_tune_size  # Update for next iteration's decision
-                                        
-                                        # If we've gone over MAX_SIZE_MB, stop trying lower CRF values
+                                        # If we're over max size, we need to back up
                                         if fine_tune_size > MAX_SIZE_MB:
-                                            break
-                                        
-                                        # Continue with the next iteration
-                                        current_crf = next_crf
+                                            print(f"Exceeded maximum size. Need to back up.")
+                                            # On next iteration, we'll increase CRF to reduce size
+                                            # Find a value between the last working CRF and this one
+                                            current_crf = int((current_crf + new_crf) / 2)
+                                            current_size = fine_tune_size
+                                            continue
+                                            
+                                        # Update current values for next iteration
+                                        if fine_tune_size > current_size:
+                                            current_crf = new_crf
+                                            current_size = fine_tune_size
+                                            current_path = fine_tune_filepath
+                                            
+                                            # If we're getting close to MIN_SIZE_MB, make smaller adjustments
+                                            if fine_tune_size > MIN_SIZE_MB * 0.8:
+                                                print(f"Getting close to target range. Decreasing step size.")
                                     else:
-                                        break  # Something went wrong, stop fine-tuning
+                                        print(f"Error: Fine-tune attempt didn't produce a file")
+                                        break
                                 except Exception as e:
                                     print(f"Error during fine-tune attempt {i+1}: {e}")
                                     if os.path.exists(fine_tune_filepath):
                                         safe_remove(fine_tune_filepath)
                                     break
+                            
+                            # After all fine-tuning attempts, select the best result
+                            if 'best_result' not in locals():
+                                # Update our valid_results to include any new fine-tuning results
+                                valid_results = [r for r in results if r[1] <= MAX_SIZE_MB]
+                                target_results = [r for r in valid_results if r[1] >= MIN_SIZE_MB]
+                                
+                                if target_results:
+                                    # We got something in range through fine-tuning
+                                    best_result = min(target_results, key=lambda r: abs(r[1] - TARGET_SIZE_MB))
+                                    print(f"Fine-tuning got us to target range! Using CRF={best_result[0]}, size={best_result[1]:.2f}MB")
+                                else:
+                                    # Still didn't get in range, use best available
+                                    best_result = max(valid_results, key=lambda r: r[1])
+                                    print(f"Fine-tuning complete. Using best available: CRF={best_result[0]}, size={best_result[1]:.2f}MB")
+                        else:
+                            # No files below MIN_SIZE_MB, must all be above MAX_SIZE_MB
+                            # We'll have to use the smallest file we found
+                            smallest_valid = min(valid_results, key=lambda r: r[1])
+                            best_result = smallest_valid
+                            print(f"All files too large. Using smallest: CRF={best_result[0]}, size={best_result[1]:.2f}MB")
                     
                     best_crf, best_size, best_filepath = best_result
                     print(f"Using best available result: CRF={best_crf}, size={best_size:.2f}MB")
@@ -595,16 +611,41 @@ def send_to_webhook(file_path, game_name):
     except Exception as e:
         print(f"Error sending clip to Discord webhook: {e}")
 
-# Global variables for the observer and stop_event
-global_observer = None
-global_stop_event = None
-
 def run(stop_event=None):
     """Main function to start the monitoring process that can be called from another module"""
     global global_observer, global_stop_event, CONFIG, WEBHOOK_URL, SHADOWPLAY_FOLDER, OUTPUT_FOLDER
     global MIN_SIZE_MB, MAX_SIZE_MB, TARGET_SIZE_MB, MAX_COMPRESSION_ATTEMPTS
     global CRF_MIN, CRF_MAX, CRF_STEP, EXTRACT_PRESET, COMPRESSION_PRESET
     global CLIP_DURATION, HIGH_QUALITY_CRF, CLOSE_THRESHOLD, MEDIUM_THRESHOLD, FAR_THRESHOLD
+    global COMPRESSION_METHOD, QUICK_CRF
+    
+    # Patch subprocess and ffmpeg to hide all console windows on Windows
+    if os.name == 'nt':
+        # Store the original Popen class
+        original_popen = subprocess.Popen
+        
+        # Create a patched version that hides console windows
+        class NoConsolePopen(subprocess.Popen):
+            def __init__(self, *args, **kwargs):
+                # Add creationflags to hide console window
+                if 'creationflags' not in kwargs:
+                    kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+                super().__init__(*args, **kwargs)
+        
+        # Replace the original Popen with our patched version
+        subprocess.Popen = NoConsolePopen
+        
+        # Also directly patch the ffmpeg run method for good measure
+        original_ffmpeg_run = ffmpeg._run.run
+        
+        def patched_ffmpeg_run(cmd, **kwargs):
+            if 'creationflags' not in kwargs:
+                kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+            return original_ffmpeg_run(cmd, **kwargs)
+        
+        ffmpeg._run.run = patched_ffmpeg_run
+        
+        print("Successfully patched subprocess and ffmpeg to hide console windows")
     
     # Set the stop event
     global_stop_event = stop_event if stop_event else threading.Event()
@@ -638,13 +679,12 @@ def run(stop_event=None):
     CLOSE_THRESHOLD = CONFIG.get('CLOSE_THRESHOLD', 0.9)
     MEDIUM_THRESHOLD = CONFIG.get('MEDIUM_THRESHOLD', 0.75)
     FAR_THRESHOLD = CONFIG.get('FAR_THRESHOLD', 0.5)
-    COMPRESSION_METHOD = CONFIG.get('COMPRESSION_METHOD', COMPRESSION_PROGRESSIVE)
+    COMPRESSION_METHOD = CONFIG.get('COMPRESSION_METHOD', COMPRESSION_QUICK)
+    QUICK_CRF = CONFIG.get('QUICK_CRF', 40)
 
-    # Display loaded settings for debugging
-    print(f"Loaded SHADOWPLAY_FOLDER: {SHADOWPLAY_FOLDER}")
-    print(f"Loaded OUTPUT_FOLDER: {OUTPUT_FOLDER}")
-    print(f"Loaded COMPRESSION_METHOD: {COMPRESSION_METHOD}")
-    print(f"Loaded size settings: MIN={MIN_SIZE_MB}MB, MAX={MAX_SIZE_MB}MB, TARGET={TARGET_SIZE_MB}MB")
+    # Display condensed settings
+    print(f"Monitoring folders: {SHADOWPLAY_FOLDER} → {OUTPUT_FOLDER}")
+    print(f"Using '{COMPRESSION_METHOD}' compression method with CRF={QUICK_CRF if COMPRESSION_METHOD == COMPRESSION_QUICK else 'variable'}")
     
     # Make sure the folders exist
     if not os.path.isdir(SHADOWPLAY_FOLDER):
@@ -665,6 +705,7 @@ def run(stop_event=None):
     
     # Create a list to store all the game folders we want to monitor
     monitor_folders = []
+    folder_count = 0
     
     # Add game-specific folders to monitor, excluding output folder
     try:
@@ -675,7 +716,9 @@ def run(stop_event=None):
                 # Check if this is a game folder (not the output folder)
                 if ntpath.basename(folder_path).lower() != "auto-clips":
                     monitor_folders.append(folder_path)
-                    print(f"Monitoring game folder: {folder_path}")
+                    folder_count += 1
+        
+        print(f"Monitoring {folder_count} game folders plus main folder")
         
         # Monitor each game folder individually (not recursively)
         for folder in monitor_folders:
@@ -684,21 +727,20 @@ def run(stop_event=None):
         # Also monitor the main Shadowplay folder for recordings saved directly there
         # but make sure not to monitor the output folder
         observer.schedule(event_handler, SHADOWPLAY_FOLDER, recursive=False)
-        print(f"Monitoring main folder: {SHADOWPLAY_FOLDER}")
         
         observer.start()
         
-        print("Clip processor is running! Monitoring for new recordings...")
+        print("Clip monitoring started successfully - waiting for new recordings...")
         
         # Loop until stop_event is set
         while not global_stop_event.is_set():
             time.sleep(1)
             
         # Proper shutdown
-        print("Stopping clip processor...")
+        print("Stopping clip monitoring...")
         observer.stop()
         observer.join()
-        print("Clip processor stopped.")
+        print("Clip monitoring stopped.")
         return True
         
     except Exception as e:
@@ -720,6 +762,7 @@ def stop():
         except Exception as e:
             print(f"Error stopping observer: {e}")
 
+# Only run initialization if the module is run directly, not when imported
 if __name__ == "__main__":
     # If run directly, create our own stop_event
     stop_event = threading.Event()

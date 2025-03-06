@@ -1,20 +1,21 @@
 {
-    "SHADOWPLAY_FOLDER": "D:/DATA/Shadowplay Recordings",
-    "OUTPUT_FOLDER": "D:/DATA/Shadowplay Recordings/auto-clips",
+    "SHADOWPLAY_FOLDER": "C:/Users/YourName/Videos/Shadowplay Recordings",
+    "OUTPUT_FOLDER": "C:/Users/YourName/Videos/Shadowplay Recordings/auto-clips",
     "MIN_SIZE_MB": 8.0,
     "MAX_SIZE_MB": 10.0,
     "TARGET_SIZE_MB": 9.0,
     "MAX_COMPRESSION_ATTEMPTS": 5,
     "CRF_MIN": 1,
-    "CRF_MAX": 30,
+    "CRF_MAX": 50,
     "CRF_STEP": 1,
     "EXTRACT_PRESET": "fast",
     "COMPRESSION_PRESET": "medium",
     "COMPRESSION_METHOD": "Quick",
-    "CLIP_DURATION": 15,
+    "CLIP_DURATION": 10,
     "HIGH_QUALITY_CRF": 18,
     "CLOSE_THRESHOLD": 0.9,
     "MEDIUM_THRESHOLD": 0.75,
     "FAR_THRESHOLD": 0.5,
-    "WEBHOOK_URL": "https://discord.com/api/webhooks/1346992504821645424/w5znvpWViNWb95DG5EgzazC8aqntV7ooUeDMp9EmXxG1lV1W97SDi43v5_9LDOG1uxB0"
+    "WEBHOOK_URL": "",
+    "QUICK_CRF": 35
 }
