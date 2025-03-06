@@ -1,0 +1,3 @@
+@echo off
+echo Building Auto-Clip-Sender...
+python -m PyInstaller --windowed --noconfirm --name="AutoClipSender" --distpath="dist" --workpath="build" --icon=icon.ico --add-data "config.py;." --add-data "defaults.py;." --add-data "clip_processor.py;." --add-data "gui.py;." --add-data "ffmpeg_helper.py;." --add-data "README.md;." --add-data ".env;." --add-binary "ffmpeg/ffmpeg.exe;." --add-binary "ffmpeg/ffprobe.exe;." app.py

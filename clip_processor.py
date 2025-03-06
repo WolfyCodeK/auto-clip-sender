@@ -1,31 +1,52 @@
 import os
 import time
-import discord
+import requests
 import ffmpeg
+import ffmpeg_helper  # Import our helper to patch ffmpeg-python
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from datetime import datetime
 import ntpath
 import math
 from dotenv import load_dotenv
-import config
+import sys
+import importlib
 
-# Load environment variables from .env file
+# Force reload of config to ensure we're using the most recent version
+if 'config' in sys.modules:
+    importlib.reload(sys.modules['config'])
+else:
+    import config
+
+# Add debugging to identify where settings are coming from
+print(f"Bot is loading configuration from: {config.__file__}")
+
+# Load environment variables from .env file - only for webhook URL
 load_dotenv()
 
-# Load configuration from environment variables (if provided) or config.py
-SHADOWPLAY_FOLDER = os.getenv("SHADOWPLAY_FOLDER", config.SHADOWPLAY_FOLDER)
-OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", config.OUTPUT_FOLDER)
+# Load folder paths directly from config.py
+SHADOWPLAY_FOLDER = config.SHADOWPLAY_FOLDER
+OUTPUT_FOLDER = config.OUTPUT_FOLDER
 
-# Discord bot token and user ID - sensitive data from .env
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-USER_ID = int(os.getenv("USER_ID", "0")) 
+# Display loaded settings for debugging
+print(f"Loaded SHADOWPLAY_FOLDER: {SHADOWPLAY_FOLDER}")
+print(f"Loaded OUTPUT_FOLDER: {OUTPUT_FOLDER}")
+
+# Get webhook URL from environment variables
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+# Verify webhook URL is available
+if not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL not found in environment variables or .env file")
 
 # Size configuration from config.py
 MIN_SIZE_MB = config.MIN_SIZE_MB
 MAX_SIZE_MB = config.MAX_SIZE_MB
 MAX_COMPRESSION_ATTEMPTS = config.MAX_COMPRESSION_ATTEMPTS
 TARGET_SIZE_MB = config.TARGET_SIZE_MB
+
+# Display additional loaded settings for debugging
+print(f"Loaded size settings: MIN={MIN_SIZE_MB}MB, MAX={MAX_SIZE_MB}MB, TARGET={TARGET_SIZE_MB}MB")
 
 # Compression settings from config.py
 CRF_MIN = config.CRF_MIN
@@ -44,16 +65,6 @@ HIGH_QUALITY_CRF = config.HIGH_QUALITY_CRF
 CLOSE_THRESHOLD = config.CLOSE_THRESHOLD
 MEDIUM_THRESHOLD = config.MEDIUM_THRESHOLD
 FAR_THRESHOLD = config.FAR_THRESHOLD
-
-# Verify critical values are loaded
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN not found in environment variables or .env file")
-if USER_ID == 0:
-    raise ValueError("USER_ID not found or invalid in environment variables or .env file")
-
-# Discord Client Setup
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
 
 class ClipHandler(FileSystemEventHandler):
     def on_created(self, event):
@@ -510,22 +521,39 @@ def process_clip(filepath):
         final_size_mb = os.path.getsize(final_filepath) / (1024 * 1024)
         print(f"Final file size: {final_size_mb:.2f}MB")
         
-        # Send the final processed file to Discord
-        client.loop.create_task(send_clip(final_filepath))
+        # Send the final processed file to Discord via webhook
+        send_to_webhook(final_filepath, game_folder_name)
     else:
         print("Error: Final file not created!")
 
-async def send_clip(file_path):
+def send_to_webhook(file_path, game_name):
+    """Send a file to Discord using a webhook."""
     try:
-        user = await client.fetch_user(USER_ID)
-        await user.send(file=discord.File(file_path))
-        print(f"Successfully sent clip: {file_path}")
+        # Get just the filename from the path
+        filename = os.path.basename(file_path)
+        
+        # Create a multipart form data payload
+        with open(file_path, 'rb') as f:
+            files = {
+                'file': (filename, f, 'video/mp4')
+            }
+            
+            # You can add a message with the file
+            data = {
+                'content': f"New clip from {game_name}"
+            }
+            
+            # Send the request to the webhook URL
+            response = requests.post(WEBHOOK_URL, files=files, data=data)
+            
+            # Check if the request was successful
+            if response.status_code == 204 or response.status_code == 200:
+                print(f"Successfully sent clip to Discord webhook: {file_path}")
+            else:
+                print(f"Error sending clip to Discord webhook: HTTP {response.status_code}")
+                print(f"Response content: {response.text}")
     except Exception as e:
-        print(f"Error sending clip to Discord: {e}")
-
-@client.event
-async def on_ready():
-    print(f'Logged in as {client.user}')
+        print(f"Error sending clip to Discord webhook: {e}")
 
 if __name__ == "__main__":
     event_handler = ClipHandler()
@@ -556,8 +584,9 @@ if __name__ == "__main__":
     observer.start()
     
     try:
-        print("Bot is running! Monitoring for new recordings...")
-        client.run(BOT_TOKEN)
+        print("Clip processor is running! Monitoring for new recordings...")
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
-observer.join()
+    observer.join()

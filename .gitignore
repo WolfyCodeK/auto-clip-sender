@@ -1,4 +1,5 @@
 # Ignore environment variables file with sensitive data
+*.env
 .env
 .env.local
 .env.*.local
@@ -31,3 +32,4 @@ dist
 build
 bin
 *.zip
+ffmpeg

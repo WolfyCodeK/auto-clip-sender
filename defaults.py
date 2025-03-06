@@ -1,10 +1,10 @@
 """
-Configuration settings for the auto-clip-sender application.
-This file can be committed to version control.
+Default configuration settings for the auto-clip-sender application.
+Do not modify this file directly. Changes to settings should be made in config.py.
 """
 
 # Folder configuration 
-SHADOWPLAY_FOLDER = "D:/DATA/Shadowplay Recordings"
+SHADOWPLAY_FOLDER = "C:/Users/put-name-here/Documents/Shadowplay Recordings"
 OUTPUT_FOLDER = "C:/Users/put-name-here/Documents/Shadowplay Recordings/auto-clips"
 
 # Size limits (MB)
