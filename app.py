@@ -9,6 +9,29 @@ from PyQt5.QtCore import QSize, Qt
 # Import our config helper to ensure config files exist in the right location
 import config_helper
 
+# Hide console windows for Windows
+if os.name == 'nt':
+    # Try to make the app run without a console window
+    import ctypes
+    ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
+    
+    # Ensure all subprocesses are hidden
+    import subprocess
+    
+    # Store the original Popen class
+    original_popen = subprocess.Popen
+    
+    # Create a patched version that hides console windows
+    class NoConsolePopen(subprocess.Popen):
+        def __init__(self, *args, **kwargs):
+            # Add creationflags to hide console window
+            if 'creationflags' not in kwargs:
+                kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+            super().__init__(*args, **kwargs)
+    
+    # Replace the original Popen with our patched version
+    subprocess.Popen = NoConsolePopen
+
 # Set up exception hook to show errors in message boxes
 def excepthook(exc_type, exc_value, exc_tb):
     tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -41,6 +64,21 @@ if __name__ == '__main__':
             os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ['PATH']
             print(f"Added ffmpeg directory to PATH: {ffmpeg_dir}")
 
+        # Patch ffmpeg to hide windows if possible
+        try:
+            import ffmpeg
+            original_ffmpeg_run = ffmpeg._run.run
+            
+            def patched_ffmpeg_run(cmd, **kwargs):
+                if 'creationflags' not in kwargs and os.name == 'nt':
+                    kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+                return original_ffmpeg_run(cmd, **kwargs)
+            
+            ffmpeg._run.run = patched_ffmpeg_run
+            print("FFmpeg patched to hide console windows")
+        except ImportError:
+            print("ffmpeg-python not imported yet, will be patched later")
+
         # Import and start the GUI
         from gui import AutoClipSenderGUI
         app = QApplication(sys.argv)
@@ -50,48 +88,42 @@ if __name__ == '__main__':
         app.setApplicationDisplayName("Auto Clip Sender")
         app.setOrganizationName("Auto Clip Sender")
         
-        # Look for the icon in the _internal folder first (for PyInstaller build)
-        # Then fallback to root directory (for development)
-        internal_icon_path = os.path.join(app_dir, '_internal', '128x128.ico')
-        root_icon_path = os.path.join(app_dir, '128x128.ico')
+        # Set app style to fusion for a modern look
+        app.setStyle('Fusion')
         
-        print(f"Looking for icon in _internal folder: {internal_icon_path}")
-        print(f"Icon exists in _internal: {os.path.exists(internal_icon_path)}")
+        # Try all possible icon locations
+        icon_paths = [
+            os.path.join(app_dir, '_internal', '128x128.ico'),  # PyInstaller build
+            os.path.join(app_dir, '128x128.ico'),              # Root directory
+            os.path.join(app_dir, 'icons', '128x128.ico'),     # Icons folder
+        ]
         
-        print(f"Looking for icon in root: {root_icon_path}")
-        print(f"Icon exists in root: {os.path.exists(root_icon_path)}")
-        
-        # Choose the first available icon path
-        icon_path = None
-        if os.path.exists(internal_icon_path):
-            icon_path = internal_icon_path
-            print(f"Using icon from _internal folder")
-        elif os.path.exists(root_icon_path):
-            icon_path = root_icon_path
-            print(f"Using icon from root directory")
-        
-        if icon_path:
-            app_icon = QIcon(icon_path)
+        app_icon = None
+        for icon_path in icon_paths:
+            if os.path.exists(icon_path):
+                print(f"Using icon from: {icon_path}")
+                app_icon = QIcon(icon_path)
+                break
+                
+        if app_icon and not app_icon.isNull():
             app.setWindowIcon(app_icon)
-            print(f"Set application icon from {icon_path}")
             
             # Set app ID for Windows (helps with taskbar icon)
             if os.name == 'nt':
                 try:
-                    import ctypes
                     app_id = "autoClipSender.1.0"
                     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
                     print(f"Set Windows Application User Model ID to: {app_id}")
                 except Exception as e:
                     print(f"Error setting application ID: {e}")
         else:
-            print("Icon file not found in any location.")
+            print("No valid icon file found.")
         
         # Create main window
         window = AutoClipSenderGUI()
         
         # If we set an app icon, also set it on the window
-        if 'app_icon' in locals() and not app_icon.isNull():
+        if app_icon and not app_icon.isNull():
             window.setWindowIcon(app_icon)
             
         window.show()
