@@ -61,7 +61,9 @@ DEFAULT_CONFIG = {
     'CLOSE_THRESHOLD': 0.9,
     'MEDIUM_THRESHOLD': 0.75,
     'FAR_THRESHOLD': 0.5,
-    'WEBHOOK_URL': ""
+    'WEBHOOK_URL': "",
+    'CPU_THREADS': 0,  # 0 means auto/all threads, otherwise limits threads used by FFmpeg
+    'USER_NAME': ""    # User's name to display in Discord messages
 }
 
 # Load configuration using config_helper
@@ -630,11 +632,29 @@ class AutoClipSenderGUI(QMainWindow):
                                          "fast", "medium", "slow", "slower", "veryslow"])
         self.compression_preset.setCurrentText(self.get_config_value('COMPRESSION_PRESET'))
         
+        # Add CPU thread limit setting
+        self.cpu_threads = NoWheelSpinBox()
+        self.cpu_threads.setRange(0, 64) # 0 means auto/all cores, up to 64 cores
+        self.cpu_threads.setValue(int(self.get_config_value('CPU_THREADS')))
+        
+        # Help text for the settings
+        preset_help = QLabel("Presets control the speed vs. efficiency tradeoff in FFmpeg:\n• Faster presets (ultrafast, superfast) = quicker encoding but larger files\n• Slower presets (slow, veryslow) = better compression but slower encoding")
+        preset_help.setWordWrap(True)
+        
+        cpu_threads_help = QLabel("Limit the number of CPU threads used by FFmpeg:\n• 0 = Automatic (use all available threads)\n• 1-4 = Good for low-end PCs to reduce system slowdown\n• Higher values = Use more CPU power for faster processing\n\nLowering this value will make processing take longer but keep your system more responsive.")
+        cpu_threads_help.setWordWrap(True)
+        
         # Add FFmpeg settings to layout
         ffmpeg_layout.addWidget(QLabel("Extract Preset:"))
         ffmpeg_layout.addWidget(self.create_setting_row("Extract Preset:", self.extract_preset, 'EXTRACT_PRESET')[1])
         ffmpeg_layout.addWidget(QLabel("Compression Preset:"))
         ffmpeg_layout.addWidget(self.create_setting_row("Compression Preset:", self.compression_preset, 'COMPRESSION_PRESET')[1])
+        ffmpeg_layout.addWidget(preset_help)
+        ffmpeg_layout.addSpacing(20)
+        
+        ffmpeg_layout.addWidget(QLabel("CPU Threads (0=Auto):"))
+        ffmpeg_layout.addWidget(self.create_setting_row("CPU Threads:", self.cpu_threads, 'CPU_THREADS')[1])
+        ffmpeg_layout.addWidget(cpu_threads_help)
         ffmpeg_layout.addStretch()
 
         # DISCORD TAB
@@ -644,6 +664,11 @@ class AutoClipSenderGUI(QMainWindow):
         self.webhook_url.setText(self.get_config_value('WEBHOOK_URL'))
         print(f"Loaded webhook URL from config: {'[SET]' if self.webhook_url.text() else '[NOT SET]'}")
         
+        # Add user name setting
+        self.user_name = QLineEdit()
+        self.user_name.setText(self.get_config_value('USER_NAME'))
+        self.user_name.setPlaceholderText("Your Name (optional)")
+        
         # Add Discord settings to layout with a different approach (no reset button)
         webhook_layout = QHBoxLayout()
         webhook_layout.addWidget(self.webhook_url)
@@ -652,13 +677,29 @@ class AutoClipSenderGUI(QMainWindow):
         webhook_widget = QWidget()
         webhook_widget.setLayout(webhook_layout)
         
+        # User name layout
+        user_name_layout = QHBoxLayout()
+        user_name_layout.addWidget(self.user_name)
+        user_name_layout.setContentsMargins(0, 0, 0, 0)
+        
+        user_name_widget = QWidget()
+        user_name_widget.setLayout(user_name_layout)
+        
         discord_layout.addWidget(QLabel("Discord Webhook URL:"))
         discord_layout.addWidget(webhook_widget)
+        
+        discord_layout.addWidget(QLabel("Your Name (for Discord messages):"))
+        discord_layout.addWidget(user_name_widget)
         
         # Add a note about webhook usage
         webhook_note = QLabel("Create a webhook in your Discord server settings and paste the URL here.\nThe URL should look like: https://discord.com/api/webhooks/...")
         webhook_note.setWordWrap(True)
         discord_layout.addWidget(webhook_note)
+        
+        # Add a note about the user name setting
+        user_name_note = QLabel("Your name will be shown in Discord messages when clips are sent.\nLeave blank to use the default message format.")
+        user_name_note.setWordWrap(True)
+        discord_layout.addWidget(user_name_note)
         
         # Add a spacer to push everything to the top
         discord_layout.addStretch()
@@ -702,10 +743,10 @@ class AutoClipSenderGUI(QMainWindow):
         if reply == QMessageBox.No:
             return
         
-        # Save current webhook URL before restoring defaults
+        # Save current webhook URL and user name before restoring defaults
         current_webhook_url = self.webhook_url.text().strip()
+        current_user_name = self.user_name.text().strip()
         
-        # Load default values
         try:
             defaults = config_helper.load_json_config(DEFAULTS_FILE)
             if not defaults:
@@ -737,6 +778,10 @@ class AutoClipSenderGUI(QMainWindow):
             # Restore FFmpeg presets
             self.extract_preset.setCurrentText(defaults.get('EXTRACT_PRESET', DEFAULT_CONFIG['EXTRACT_PRESET']))
             self.compression_preset.setCurrentText(defaults.get('COMPRESSION_PRESET', DEFAULT_CONFIG['COMPRESSION_PRESET']))
+            self.cpu_threads.setValue(defaults.get('CPU_THREADS', DEFAULT_CONFIG['CPU_THREADS']))
+            
+            # Restore user name
+            self.user_name.setText(defaults.get('USER_NAME', DEFAULT_CONFIG['USER_NAME']))
             
             print("Settings restored from defaults.json")
         except Exception as e:
@@ -767,13 +812,18 @@ class AutoClipSenderGUI(QMainWindow):
             # Restore FFmpeg presets
             self.extract_preset.setCurrentText(DEFAULT_CONFIG['EXTRACT_PRESET'])
             self.compression_preset.setCurrentText(DEFAULT_CONFIG['COMPRESSION_PRESET'])
+            self.cpu_threads.setValue(DEFAULT_CONFIG['CPU_THREADS'])
+            
+            # Restore user name
+            self.user_name.setText(DEFAULT_CONFIG['USER_NAME'])
         
-        # Keep the current webhook URL instead of resetting it
+        # Keep the current webhook URL and user name instead of resetting them
         self.webhook_url.setText(current_webhook_url)
-        print("Webhook URL preserved during defaults restoration")
+        self.user_name.setText(current_user_name)
+        print("Webhook URL and user name preserved during defaults restoration")
         
-        print("All settings except webhook URL have been restored to defaults. Click 'Save Configuration' to apply these changes.")
-        QMessageBox.information(self, "Defaults Restored", "All settings except webhook URL have been restored to defaults. Click 'Save Configuration' to apply these changes.")
+        print("All settings except webhook URL and user name have been restored to defaults. Click 'Save Configuration' to apply these changes.")
+        QMessageBox.information(self, "Defaults Restored", "All settings except webhook URL and user name have been restored to defaults. Click 'Save Configuration' to apply these changes.")
     
     def save_configuration(self):
         # Prepare config dictionary with values from UI elements
@@ -793,7 +843,9 @@ class AutoClipSenderGUI(QMainWindow):
             'HIGH_QUALITY_CRF': self.high_quality_crf.value(),
             'QUICK_CRF': self.quick_crf.value(),
             'WEBHOOK_URL': self.webhook_url.text(),
-            'COMPRESSION_METHOD': self.compression_method.currentText()
+            'COMPRESSION_METHOD': self.compression_method.currentText(),
+            'CPU_THREADS': self.cpu_threads.value(),
+            'USER_NAME': self.user_name.text().strip()
         }
         
         # Add threshold values from CONFIG (these don't have UI elements)

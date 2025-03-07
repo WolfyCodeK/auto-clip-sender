@@ -1,6 +1,6 @@
 {
-    "SHADOWPLAY_FOLDER": "C:/Users/YourName/Videos/Shadowplay Recordings",
-    "OUTPUT_FOLDER": "C:/Users/YourName/Videos/Shadowplay Recordings/auto-clips",
+    "SHADOWPLAY_FOLDER": "C:/Users/your-name/Videos",
+    "OUTPUT_FOLDER": "C:/Users/your-name/Videos/auto-clips",
     "MIN_SIZE_MB": 8.0,
     "MAX_SIZE_MB": 10.0,
     "TARGET_SIZE_MB": 9.0,
@@ -10,12 +10,13 @@
     "CRF_STEP": 1,
     "EXTRACT_PRESET": "fast",
     "COMPRESSION_PRESET": "medium",
-    "COMPRESSION_METHOD": "Quick",
     "CLIP_DURATION": 10,
     "HIGH_QUALITY_CRF": 18,
     "CLOSE_THRESHOLD": 0.9,
     "MEDIUM_THRESHOLD": 0.75,
     "FAR_THRESHOLD": 0.5,
-    "WEBHOOK_URL": "",
-    "QUICK_CRF": 35
+    "COMPRESSION_METHOD": "Quick",
+    "QUICK_CRF": 33,
+    "CPU_THREADS": 1,
+    "USER_NAME": "anonymous"
 }
