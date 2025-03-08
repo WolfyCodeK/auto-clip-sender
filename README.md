@@ -9,7 +9,7 @@ Icon source: www.clipartmax.com
 
 Get the latest version:
 
-[Download Auto-Clip-Sender (Google Drive)](https://drive.google.com/file/d/1HsTomjIZJmfRrf032_RvYObgg4dEENB3/view?usp=sharing)
+[Download Auto-Clip-Sender (Google Drive)](https://drive.google.com/file/d/1rZFTVSaBMufjWfcqZWW5ay95qjzSlwod/view?usp=sharing)
 
 ## Overview
 
